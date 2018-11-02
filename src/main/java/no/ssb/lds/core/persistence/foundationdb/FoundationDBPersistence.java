@@ -398,7 +398,8 @@ public class FoundationDBPersistence implements Persistence {
                 Tuple versionTuple = keyTuple.getNestedTuple(1);
                 if (id != null) {
                     if (!id.equals(dbId) || (prevVersion != null && !versionTuple.equals(prevVersion))) {
-                        if (prevVersion.compareTo(timestampTuple) <= 0) {
+                        if (!id.equals(dbId) || prevVersion.compareTo(timestampTuple) <= 0) {
+                            // TODO check when only one fragment in document
                             documentById.put(id, new Document(namespace, entity, id, toTimestamp(prevVersion), List.copyOf(fragments)));
                         }
                         fragments.clear();
