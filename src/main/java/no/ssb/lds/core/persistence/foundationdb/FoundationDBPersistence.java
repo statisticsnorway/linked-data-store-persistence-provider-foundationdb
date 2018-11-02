@@ -4,6 +4,7 @@ import com.apple.foundationdb.Database;
 import com.apple.foundationdb.KeySelector;
 import com.apple.foundationdb.KeyValue;
 import com.apple.foundationdb.ReadTransaction;
+import com.apple.foundationdb.Transaction;
 import com.apple.foundationdb.async.AsyncIterable;
 import com.apple.foundationdb.async.AsyncIterator;
 import com.apple.foundationdb.directory.Directory;
@@ -81,44 +82,48 @@ public class FoundationDBPersistence implements Persistence {
 
     @Override
     public void createOrOverwrite(Document document) throws PersistenceException {
+        db.run(transaction -> doCreateOrOverwrite(transaction, document));
+    }
+
+    Object doCreateOrOverwrite(Transaction transaction, Document document) {
+        // TODO clear version in db first.
+
         DirectorySubspace primary = getPrimary(document.getNamespace(), document.getEntity());
         DirectorySubspace index = getIndex(document.getNamespace(), document.getEntity());
-        db.run(transaction -> {
 
-            for (Fragment fragment : document.getFragments()) {
+        for (Fragment fragment : document.getFragments()) {
 
-                Tuple timestampTuple = toTuple(document.getTimestamp());
+            Tuple timestampTuple = toTuple(document.getTimestamp());
 
-                /*
-                 * PRIMARY
-                 */
-                Tuple primaryKey = Tuple.from(
-                        document.getId(),
-                        timestampTuple,
-                        fragment.getPath()
-                );
-                Tuple primaryValue = Tuple.from(fragment.getValue());
-                byte[] binaryPrimaryKey = primary.pack(primaryKey);
-                byte[] binaryPrimaryValue = primaryValue.pack();
-                transaction.set(binaryPrimaryKey, binaryPrimaryValue);
+            /*
+             * PRIMARY
+             */
+            Tuple primaryKey = Tuple.from(
+                    document.getId(),
+                    timestampTuple,
+                    fragment.getPath()
+            );
+            Tuple primaryValue = Tuple.from(fragment.getValue());
+            byte[] binaryPrimaryKey = primary.pack(primaryKey);
+            byte[] binaryPrimaryValue = primaryValue.pack();
+            transaction.set(binaryPrimaryKey, binaryPrimaryValue);
 
-                /*
-                 * INDEX
-                 */
-                Tuple valueIndexKey = Tuple.from(
-                        fragment.getArrayIndicesUnawarePath(),
-                        fragment.getValue(), // TODO truncate value to max-length (approx 9KB) and support this in querying
-                        timestampTuple,
-                        Tuple.from(fragment.getArrayIndices()),
-                        document.getId()
-                );
-                byte[] binaryValueIndexKey = index.pack(valueIndexKey);
-                transaction.set(binaryValueIndexKey, EMPTY_BYTE_ARRAY);
+            /*
+             * INDEX
+             */
+            Tuple valueIndexKey = Tuple.from(
+                    fragment.getArrayIndicesUnawarePath(),
+                    fragment.getValue(), // TODO truncate value to max-length (approx 9KB) and support this in querying
+                    timestampTuple,
+                    Tuple.from(fragment.getArrayIndices()),
+                    document.getId()
+            );
+            byte[] binaryValueIndexKey = index.pack(valueIndexKey);
+            transaction.set(binaryValueIndexKey, EMPTY_BYTE_ARRAY);
 
-            }
+        }
 
-            return null;
-        });
+        return null;
     }
 
     @Override
@@ -160,7 +165,7 @@ public class FoundationDBPersistence implements Persistence {
         }
     }
 
-    CompletableFuture<Document> getDocument(ReadTransaction transaction, String namespace, String entity, String id, Tuple version) {
+    private CompletableFuture<Document> getDocument(ReadTransaction transaction, String namespace, String entity, String id, Tuple version) {
         DirectorySubspace primary = getPrimary(namespace, entity);
         Tuple documentTimestampTuplePlusOneTick = tick(version);
         AsyncIterable<KeyValue> range = transaction.getRange(
@@ -278,7 +283,7 @@ public class FoundationDBPersistence implements Persistence {
         });
     }
 
-    CompletableFuture<List<Document>> getDocuments(String namespace, String entity, AsyncIterable<KeyValue> range) {
+    private CompletableFuture<List<Document>> getDocuments(String namespace, String entity, AsyncIterable<KeyValue> range) {
         final DirectorySubspace primary = getPrimary(namespace, entity);
         final List<Document> documents = new ArrayList<>();
         final List<Fragment> fragments = new ArrayList<>();
@@ -354,31 +359,32 @@ public class FoundationDBPersistence implements Persistence {
 
     @Override
     public List<Document> findAll(ZonedDateTime timestamp, String namespace, String entity, int limit) throws PersistenceException {
-        return db.read(transaction -> {
-            final DirectorySubspace primary = getPrimary(namespace, entity);
-            /*
-             * Get all fragments of all versions.
-             */
-            final AsyncIterable<KeyValue> range = transaction.getRange(
-                    KeySelector.firstGreaterOrEqual(primary.pack(Tuple.from())),
-                    KeySelector.firstGreaterOrEqual(primary.pack(Tuple.from("~")))
-            );
+        return db.read(transaction -> doFindAll(transaction, timestamp, namespace, entity, limit));
+    }
 
-            final Map<String, Document> documentById = new ConcurrentHashMap<>();
-            final List<Fragment> fragments = new ArrayList<>();
-            final AsyncIterator<KeyValue> iterator = range.iterator();
-            CompletableFuture<List<Document>> documentsCompletableFuture = new CompletableFuture<>();
-            final AtomicReference<Tuple> prevVersionRef = new AtomicReference<>();
-            iterator.onHasNext().thenAccept(onNextFragment(toTuple(timestamp), namespace, entity, null, primary, documentById, fragments, iterator, documentsCompletableFuture, null, limit));
+    List<Document> doFindAll(ReadTransaction transaction, ZonedDateTime timestamp, String namespace, String entity, int limit) {
+        final DirectorySubspace primary = getPrimary(namespace, entity);
+        /*
+         * Get all fragments of all versions.
+         */
+        final AsyncIterable<KeyValue> range = transaction.getRange(
+                KeySelector.firstGreaterOrEqual(primary.pack(Tuple.from())),
+                KeySelector.firstGreaterOrEqual(primary.pack(Tuple.from("~")))
+        );
 
-            try {
-                return documentsCompletableFuture.get();
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            } catch (ExecutionException e) {
-                throw coerceRuntimeCause(e);
-            }
-        });
+        final Map<String, Document> documentById = new ConcurrentHashMap<>();
+        final List<Fragment> fragments = new ArrayList<>();
+        final AsyncIterator<KeyValue> iterator = range.iterator();
+        CompletableFuture<List<Document>> documentsCompletableFuture = new CompletableFuture<>();
+        iterator.onHasNext().thenAccept(onNextFragment(toTuple(timestamp), namespace, entity, null, primary, documentById, fragments, iterator, documentsCompletableFuture, null, limit));
+
+        try {
+            return documentsCompletableFuture.get();
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        } catch (ExecutionException e) {
+            throw coerceRuntimeCause(e);
+        }
     }
 
     private Consumer<Boolean> onNextFragment(Tuple timestampTuple, String namespace, String entity, String id, DirectorySubspace primary, Map<String, Document> documentById, List<Fragment> fragments, AsyncIterator<KeyValue> iterator, CompletableFuture<List<Document>> documentsCompletableFuture, Tuple prevVersion, int limit) {
@@ -417,10 +423,10 @@ public class FoundationDBPersistence implements Persistence {
 
     @Override
     public List<Document> find(ZonedDateTime timestamp, String namespace, String entity, String path, String value, int limit) throws PersistenceException {
-        return db.read(transaction -> doFind(timestamp, namespace, entity, path, value, transaction, limit));
+        return db.read(transaction -> doFind(transaction, timestamp, namespace, entity, path, value, limit));
     }
 
-    List<Document> doFind(ZonedDateTime timestamp, String namespace, String entity, String path, String value, ReadTransaction transaction, int limit) {
+    List<Document> doFind(ReadTransaction transaction, ZonedDateTime timestamp, String namespace, String entity, String path, String value, int limit) {
         // TODO use limit
         DirectorySubspace index = getIndex(namespace, entity);
         String arrayIndexUnawarePath = path.replaceAll(Fragment.arrayIndexPattern.pattern(), "[]");
