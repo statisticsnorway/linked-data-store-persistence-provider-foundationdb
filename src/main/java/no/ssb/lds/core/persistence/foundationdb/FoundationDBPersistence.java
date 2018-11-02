@@ -471,6 +471,7 @@ public class FoundationDBPersistence implements Persistence {
 
     @Override
     public void close() throws PersistenceException {
+        db.close();
     }
 
     static Tuple toTuple(ZonedDateTime timestamp) {
