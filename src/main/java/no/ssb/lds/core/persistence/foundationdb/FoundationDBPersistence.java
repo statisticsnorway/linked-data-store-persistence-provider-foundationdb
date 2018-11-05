@@ -9,7 +9,6 @@ import com.apple.foundationdb.async.AsyncIterable;
 import com.apple.foundationdb.async.AsyncIterator;
 import com.apple.foundationdb.directory.Directory;
 import com.apple.foundationdb.directory.DirectorySubspace;
-import com.apple.foundationdb.directory.PathUtil;
 import com.apple.foundationdb.tuple.Tuple;
 import no.ssb.lds.api.persistence.Document;
 import no.ssb.lds.api.persistence.Fragment;
@@ -32,7 +31,6 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
-import java.util.function.Function;
 
 /*
  * PRIMARY:
@@ -54,32 +52,24 @@ public class FoundationDBPersistence implements Persistence {
     private static final int MAX_VALUE_LENGTH = 100000;
 
     final Database db;
-    final Directory namespaceDirectory;
-    final Map<String, Map<String, DirectorySubspace>> directorySubspaceByDomainByNamespace = new ConcurrentHashMap<>();
+    final Directory directory;
+    final Map<Tuple, DirectorySubspace> directorySubspaceByDomainByNamespace = new ConcurrentHashMap<>();
 
-    public FoundationDBPersistence(Database db, String defaultNamespace, Directory namespaceDirectory, Map<String, DirectorySubspace> defaultNamespaceDirectorySubspaceByDomain) {
+    public FoundationDBPersistence(Database db, Directory directory) {
         this.db = db;
-        this.namespaceDirectory = namespaceDirectory;
+        this.directory = directory;
     }
 
     DirectorySubspace getPrimary(String namespace, String entity) {
-        return directorySubspaceByDomainByNamespace.computeIfAbsent(namespace, ns -> new ConcurrentHashMap<>()).computeIfAbsent(entity, createOrOpenDirectorySubspace());
+        return createOrOpenDirectorySubspace(Tuple.from(namespace, entity, "Primary"));
     }
 
     DirectorySubspace getIndex(String namespace, String entity) {
-        return directorySubspaceByDomainByNamespace.computeIfAbsent(namespace, ns -> new ConcurrentHashMap<>()).computeIfAbsent("Index-" + entity, createOrOpenDirectorySubspace());
+        return createOrOpenDirectorySubspace(Tuple.from(namespace, entity, "IndexPathValue"));
     }
 
-    Function<String, DirectorySubspace> createOrOpenDirectorySubspace() {
-        return subspace -> {
-            try {
-                return namespaceDirectory.createOrOpen(db, PathUtil.from(subspace)).get();
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            } catch (ExecutionException e) {
-                throw coerceRuntimeCause(e);
-            }
-        };
+    DirectorySubspace createOrOpenDirectorySubspace(Tuple key) {
+        return directorySubspaceByDomainByNamespace.computeIfAbsent(key, t -> directory.createOrOpen(db, List.of(t.getString(0), t.popFront().toString())).join());
     }
 
     @Override
@@ -469,11 +459,11 @@ public class FoundationDBPersistence implements Persistence {
         List<CompletableFuture<Document>> documentFutures = new ArrayList<>();
         Map<String, SortedSet<Tuple>> matchingVersionsById = new LinkedHashMap<>();
         while (rangeIterator.hasNext()) {
-            // / NAMESPACE / ENTITY / ARRAY-INDEX-UNAWARE-PATH / VALUE / TIMESTAMP / ARRAY-INDICES-FROM-PATH / ID  =  ""
+            // / NAMESPACE-ENTITY-DIRECTORY / ARRAY-INDEX-UNAWARE-PATH / VALUE / TIMESTAMP / ARRAY-INDICES-FROM-PATH / ID  =  ""
             KeyValue kv = rangeIterator.next();
-            Tuple key = Tuple.fromBytes(kv.getKey());
-            Tuple matchedVersion = key.getNestedTuple(4);
-            String id = key.getString(6);
+            Tuple key = index.unpack(kv.getKey());
+            Tuple matchedVersion = key.getNestedTuple(2);
+            String id = key.getString(4);
             matchingVersionsById.computeIfAbsent(id, k -> new TreeSet<>()).add(matchedVersion);
         }
         for (Map.Entry<String, SortedSet<Tuple>> entry : matchingVersionsById.entrySet()) {

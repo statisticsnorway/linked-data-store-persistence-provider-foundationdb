@@ -9,7 +9,6 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -19,7 +18,11 @@ public class FoundationDBInitializerTest {
 
     public static void main(String[] args) {
         String namespace = "sample-namespace-1";
-        FoundationDBPersistence persistence = new FoundationDBInitializer().initialize(namespace, Collections.emptyMap(), Set.of("Person", "Address"));
+        FoundationDBPersistence persistence = new FoundationDBInitializer().initialize(
+                namespace,
+                Map.of("node-prefix.hex", "3A",
+                        "content-prefix.hex", "3B"),
+                Set.of("Person", "Address", "FunkyLongAddress"));
         ZonedDateTime jan1624 = ZonedDateTime.of(1624, 1, 1, 12, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
         ZonedDateTime jan1626 = ZonedDateTime.of(1626, 1, 1, 12, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
         ZonedDateTime jan1664 = ZonedDateTime.of(1664, 1, 1, 12, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
