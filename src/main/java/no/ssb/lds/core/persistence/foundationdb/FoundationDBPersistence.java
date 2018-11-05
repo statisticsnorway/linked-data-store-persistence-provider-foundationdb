@@ -50,6 +50,8 @@ public class FoundationDBPersistence implements Persistence {
 
     static final byte[] EMPTY_BYTE_ARRAY = new byte[0];
     static final ZoneId ZONE_ID_UTC = ZoneId.of("Etc/UTC");
+    private static final int MAX_KEY_LENGTH = 10000;
+    private static final int MAX_VALUE_LENGTH = 100000;
 
     final Database db;
     final Directory namespaceDirectory;
@@ -60,15 +62,15 @@ public class FoundationDBPersistence implements Persistence {
         this.namespaceDirectory = namespaceDirectory;
     }
 
-    private DirectorySubspace getPrimary(String namespace, String entity) {
+    DirectorySubspace getPrimary(String namespace, String entity) {
         return directorySubspaceByDomainByNamespace.computeIfAbsent(namespace, ns -> new ConcurrentHashMap<>()).computeIfAbsent(entity, createOrOpenDirectorySubspace());
     }
 
-    private DirectorySubspace getIndex(String namespace, String entity) {
+    DirectorySubspace getIndex(String namespace, String entity) {
         return directorySubspaceByDomainByNamespace.computeIfAbsent(namespace, ns -> new ConcurrentHashMap<>()).computeIfAbsent("Index-" + entity, createOrOpenDirectorySubspace());
     }
 
-    private Function<String, DirectorySubspace> createOrOpenDirectorySubspace() {
+    Function<String, DirectorySubspace> createOrOpenDirectorySubspace() {
         return subspace -> {
             try {
                 return namespaceDirectory.createOrOpen(db, PathUtil.from(subspace)).get();
@@ -86,14 +88,23 @@ public class FoundationDBPersistence implements Persistence {
     }
 
     Object doCreateOrOverwrite(Transaction transaction, Document document) {
-        // TODO clear version in db first.
-
         DirectorySubspace primary = getPrimary(document.getNamespace(), document.getEntity());
         DirectorySubspace index = getIndex(document.getNamespace(), document.getEntity());
 
-        for (Fragment fragment : document.getFragments()) {
+        Tuple timestampTuple = toTuple(document.getTimestamp());
 
-            Tuple timestampTuple = toTuple(document.getTimestamp());
+
+        // Clear primary of existing document with same version
+        transaction.clear(primary.range(Tuple.from(document.getId(), timestampTuple)));
+
+        // NOTE: With current implementation we do not need to clear the index. False-positive matches in the index
+        // are always followed up by a primary lookup. Clearing Index space is expensive as it requires a read to
+        // figure out whether there is anything to clear and then another read to get existing doument and then finally
+        // clearing each document fragment independently from the existing document in the index space which cannot be
+        // done with a single range operation and therefore must be done using individual write operations per fragment.
+
+
+        for (Fragment fragment : document.getFragments()) {
 
             /*
              * PRIMARY
@@ -106,6 +117,12 @@ public class FoundationDBPersistence implements Persistence {
             Tuple primaryValue = Tuple.from(fragment.getValue());
             byte[] binaryPrimaryKey = primary.pack(primaryKey);
             byte[] binaryPrimaryValue = primaryValue.pack();
+            if (binaryPrimaryKey.length > MAX_KEY_LENGTH) {
+                throw new IllegalArgumentException("Document fragment key is too big for primary, at most " + MAX_KEY_LENGTH + " bytes allowed. Was: " + binaryPrimaryKey.length + " bytes.");
+            }
+            if (binaryPrimaryValue.length > MAX_VALUE_LENGTH) {
+                throw new IllegalArgumentException("Document fragment value is too big for primary, at most " + MAX_VALUE_LENGTH + " bytes allowed. Was: " + binaryPrimaryValue.length + " bytes.");
+            }
             transaction.set(binaryPrimaryKey, binaryPrimaryValue);
 
             /*
@@ -113,17 +130,24 @@ public class FoundationDBPersistence implements Persistence {
              */
             Tuple valueIndexKey = Tuple.from(
                     fragment.getArrayIndicesUnawarePath(),
-                    fragment.getValue(), // TODO truncate value to max-length (approx 9KB) and support this in querying
+                    truncateToMaxKeyLength(fragment.getValue()),
                     timestampTuple,
                     Tuple.from(fragment.getArrayIndices()),
                     document.getId()
             );
             byte[] binaryValueIndexKey = index.pack(valueIndexKey);
+            if (binaryValueIndexKey.length > MAX_KEY_LENGTH) {
+                throw new IllegalArgumentException("Document fragment key is too big for index, at most " + MAX_KEY_LENGTH + " bytes allowed. Was: " + binaryValueIndexKey.length + " bytes.");
+            }
             transaction.set(binaryValueIndexKey, EMPTY_BYTE_ARRAY);
 
         }
 
         return null;
+    }
+
+    static String truncateToMaxKeyLength(String input) {
+        return input.substring(0, Math.min(input.length(), 9 * 1024));
     }
 
     @Override
@@ -189,7 +213,10 @@ public class FoundationDBPersistence implements Persistence {
                 fragments.add(new Fragment(path, value));
                 iterator.onHasNext().thenAccept(getBooleanConsumer(iterator, documentCompletableFuture, fragments, primary, namespace, entity, id, version));
             } else {
-                Document document = new Document(namespace, entity, id, toTimestamp(version), fragments);
+                Document document = null;
+                if (!fragments.isEmpty()) {
+                    document = new Document(namespace, entity, id, toTimestamp(version), fragments);
+                }
                 documentCompletableFuture.complete(document);
             }
         };
@@ -432,9 +459,10 @@ public class FoundationDBPersistence implements Persistence {
         DirectorySubspace index = getIndex(namespace, entity);
         String arrayIndexUnawarePath = path.replaceAll(Fragment.arrayIndexPattern.pattern(), "[]");
         Tuple timestampTuple = toTuple(timestamp);
+        String truncatedValue = truncateToMaxKeyLength(value);
         AsyncIterable<KeyValue> range = transaction.getRange(
-                KeySelector.firstGreaterOrEqual(index.pack(Tuple.from(arrayIndexUnawarePath, value))),
-                KeySelector.firstGreaterOrEqual(index.pack(Tuple.from(arrayIndexUnawarePath, value, tick(timestampTuple))))
+                KeySelector.firstGreaterOrEqual(index.pack(Tuple.from(arrayIndexUnawarePath, truncatedValue))),
+                KeySelector.firstGreaterOrEqual(index.pack(Tuple.from(arrayIndexUnawarePath, truncatedValue, tick(timestampTuple))))
         );
         AsyncIterator<KeyValue> rangeIterator = range.iterator();
         List<Document> documents = Collections.synchronizedList(new ArrayList<>());
@@ -452,7 +480,26 @@ public class FoundationDBPersistence implements Persistence {
             String id = entry.getKey();
             Tuple newestMatchingVersion = entry.getValue().last();
             documentFutures.add(getDocument(transaction, namespace, entity, id, newestMatchingVersion).thenApply(doc -> {
-                documents.add(doc);
+                if (doc != null) {
+                    if (value.length() != truncatedValue.length()) {
+                        // re-check that value matches that of primary. This must be done because value in index-key was
+                        // truncated, so it is possible to get a false-positive match
+                        for (Fragment fragment : doc.getFragments()) {
+                            if (fragment.getPath().equals(path)) {
+                                if (fragment.getValue().equals(value)) {
+                                    documents.add(doc);
+                                } else {
+                                    // false-positive-match, document should not be included
+                                }
+                                break;
+                            }
+                        }
+                    } else {
+                        documents.add(doc);
+                    }
+                } else {
+                    // TODO Remove fragment from index that match path, value, timestamp, and id.
+                }
                 return doc;
             }));
         }

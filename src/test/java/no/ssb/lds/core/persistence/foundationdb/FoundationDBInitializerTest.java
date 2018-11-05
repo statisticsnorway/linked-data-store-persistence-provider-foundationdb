@@ -109,6 +109,20 @@ public class FoundationDBInitializerTest {
             System.out.println(document);
         }
 
+        String bigString = "12345678901234567890";
+        for (int i = 0; i < 12; i++) {
+            bigString = bigString + "_" + bigString;
+        }
+        persistence.createOrOverwrite(toDocument(namespace, "FunkyLongAddress", "newyork", createAddress(bigString, "NY", "USA"), now));
+        List<Document> shouldMatch = persistence.find(now, namespace, "FunkyLongAddress", "city", bigString, 100);
+        if (shouldMatch.size() != 1) {
+            throw new IllegalStateException("Test failed! " + shouldMatch.size());
+        }
+        List<Document> shouldNotMatch = persistence.find(now, namespace, "FunkyLongAddress", "city", bigString + "1", 100);
+        if (shouldNotMatch.size() != 0) {
+            throw new IllegalStateException("Test failed! " + shouldNotMatch.size());
+        }
+
         persistence.close();
     }
 
