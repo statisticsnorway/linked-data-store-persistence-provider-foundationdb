@@ -368,6 +368,37 @@ public class FoundationDBPersistence implements Persistence {
 
     @Override
     public void delete(ZonedDateTime timestamp, String namespace, String entity, String id, PersistenceDeletePolicy policy) throws PersistenceException {
+        db.run(transaction -> doDelete(transaction, timestamp, namespace, entity, id, policy));
+    }
+
+    private Object doDelete(Transaction transaction, ZonedDateTime timestamp, String namespace, String entity, String id, PersistenceDeletePolicy policy) {
+        DirectorySubspace primary = getPrimary(namespace, entity);
+
+        Tuple timestampTuple = toTuple(timestamp);
+
+        Document document = getDocument(transaction, namespace, entity, id, timestampTuple).join();
+
+        if (document == null) {
+            return null; // nothing to delete
+        }
+
+        // Clear primary of existing document with same version
+        transaction.clear(primary.range(Tuple.from(id, timestampTuple)));
+
+        for (Fragment fragment : document.getFragments()) {
+            String truncatedValue = truncateToMaxKeyLength(fragment.getValue());
+            Tuple valueIndexKey = Tuple.from(
+                    truncatedValue,
+                    timestampTuple,
+                    Tuple.from(fragment.getArrayIndices()),
+                    document.getId()
+            );
+            DirectorySubspace index = getIndex(document.getNamespace(), document.getEntity(), fragment.getArrayIndicesUnawarePath());
+            byte[] binaryValueIndexKey = index.pack(valueIndexKey);
+            transaction.clear(binaryValueIndexKey);
+        }
+
+        return null;
     }
 
     @Override

@@ -120,15 +120,19 @@ public class FoundationDBInitializerTest {
         for (int i = 0; i < 12; i++) {
             bigString = bigString + "_" + bigString;
         }
+        System.out.println("Creating funky long address");
         persistence.createOrOverwrite(toDocument(namespace, "FunkyLongAddress", "newyork", createAddress(bigString, "NY", "USA"), oct18));
+        System.out.println("Finding funky long address by city");
         List<Document> shouldMatch = persistence.find(now, namespace, "FunkyLongAddress", "city", bigString, 100);
         if (shouldMatch.size() != 1) {
             throw new IllegalStateException("Test failed! " + shouldMatch.size());
         }
+        System.out.println("Finding funky long address by city (with non-matching value)");
         List<Document> shouldNotMatch = persistence.find(now, namespace, "FunkyLongAddress", "city", bigString + "1", 100);
         if (shouldNotMatch.size() != 0) {
             throw new IllegalStateException("Test failed! " + shouldNotMatch.size());
         }
+        System.out.println("Deleting funky long address");
         persistence.delete(oct18, namespace, "FunkyLongAddress", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS);
 
         System.out.println();
@@ -139,9 +143,35 @@ public class FoundationDBInitializerTest {
         System.out.format("newyork tick feb 1663: %s%n", persistence.read(feb1663.plus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork"));
         System.out.format("newyork mar 1663:      %s%n", persistence.read(mar1663, namespace, "Address", "newyork"));
         System.out.format("newyork now     :      %s%n", persistence.read(now, namespace, "Address", "newyork"));
+
         System.out.println();
         System.out.println("Marking newyork as deleted as of feb 1663");
+        persistence.markDeleted(feb1663, namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS);
 
+        System.out.println();
+        System.out.println("STATE AFTER DELETE MARKER");
+        System.out.format("newyork jan 1663:      %s%n", persistence.read(jan1663, namespace, "Address", "newyork"));
+        System.out.format("newyork end jan 1663:  %s%n", persistence.read(feb1663.minus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork"));
+        System.out.format("newyork feb 1663:      %s%n", persistence.read(feb1663, namespace, "Address", "newyork"));
+        System.out.format("newyork tick feb 1663: %s%n", persistence.read(feb1663.plus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork"));
+        System.out.format("newyork mar 1663:      %s%n", persistence.read(mar1663, namespace, "Address", "newyork"));
+        System.out.format("newyork now     :      %s%n", persistence.read(now, namespace, "Address", "newyork"));
+
+        System.out.println();
+        System.out.println("Deleting delete marker of feb 1663");
+        persistence.delete(feb1663, namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS);
+
+        System.out.println();
+        System.out.println("STATE AFTER DELETE MARKER WAS DELETED");
+        System.out.format("newyork jan 1663:      %s%n", persistence.read(jan1663, namespace, "Address", "newyork"));
+        System.out.format("newyork end jan 1663:  %s%n", persistence.read(feb1663.minus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork"));
+        System.out.format("newyork feb 1663:      %s%n", persistence.read(feb1663, namespace, "Address", "newyork"));
+        System.out.format("newyork tick feb 1663: %s%n", persistence.read(feb1663.plus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork"));
+        System.out.format("newyork mar 1663:      %s%n", persistence.read(mar1663, namespace, "Address", "newyork"));
+        System.out.format("newyork now     :      %s%n", persistence.read(now, namespace, "Address", "newyork"));
+
+        System.out.println();
+        System.out.println("Re-introducing delete marker of feb 1663");
         persistence.markDeleted(feb1663, namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS);
 
         System.out.println();
