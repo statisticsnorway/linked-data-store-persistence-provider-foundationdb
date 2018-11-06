@@ -122,18 +122,20 @@ public class FoundationDBPersistence implements Persistence {
             /*
              * INDEX
              */
+            String truncatedValue = truncateToMaxKeyLength(fragment.getValue());
             Tuple valueIndexKey = Tuple.from(
-                    truncateToMaxKeyLength(fragment.getValue()),
+                    truncatedValue,
                     timestampTuple,
                     Tuple.from(fragment.getArrayIndices()),
                     document.getId()
             );
             DirectorySubspace index = getIndex(document.getNamespace(), document.getEntity(), fragment.getArrayIndicesUnawarePath());
             byte[] binaryValueIndexKey = index.pack(valueIndexKey);
+            byte[] binaryValueIndexValue = (truncatedValue.length() == fragment.getValue().length()) ? EMPTY_BYTE_ARRAY : binaryPrimaryValue;
             if (binaryValueIndexKey.length > MAX_KEY_LENGTH) {
                 throw new IllegalArgumentException("Document fragment key is too big for index, at most " + MAX_KEY_LENGTH + " bytes allowed. Was: " + binaryValueIndexKey.length + " bytes.");
             }
-            transaction.set(binaryValueIndexKey, EMPTY_BYTE_ARRAY);
+            transaction.set(binaryValueIndexKey, binaryValueIndexValue);
 
         }
 
@@ -425,6 +427,7 @@ public class FoundationDBPersistence implements Persistence {
     List<Document> doFind(ReadTransaction transaction, ZonedDateTime timestamp, String namespace, String entity, String path, String value, int limit) {
         // TODO use limit
         String arrayIndexUnawarePath = path.replaceAll(Fragment.arrayIndexPattern.pattern(), "[]");
+        DirectorySubspace primary = getPrimary(namespace, entity);
         DirectorySubspace index = getIndex(namespace, entity, arrayIndexUnawarePath);
         Tuple timestampTuple = toTuple(timestamp);
         String truncatedValue = truncateToMaxKeyLength(value);
@@ -438,6 +441,10 @@ public class FoundationDBPersistence implements Persistence {
         Map<String, SortedSet<Tuple>> matchingVersionsById = new LinkedHashMap<>();
         while (rangeIterator.hasNext()) {
             KeyValue kv = rangeIterator.next();
+            if (kv.getValue().length > 0 && !value.equals(new String(kv.getValue(), StandardCharsets.UTF_8))) {
+                // false-positive match due to value truncation
+                continue;
+            }
             Tuple key = index.unpack(kv.getKey());
             Tuple matchedVersion = key.getNestedTuple(1);
             String id = key.getString(3);
@@ -446,28 +453,20 @@ public class FoundationDBPersistence implements Persistence {
         for (Map.Entry<String, SortedSet<Tuple>> entry : matchingVersionsById.entrySet()) {
             String id = entry.getKey();
             Tuple newestMatchingVersion = entry.getValue().last();
-            documentFutures.add(getDocument(transaction, namespace, entity, id, newestMatchingVersion).thenApply(doc -> {
-                if (doc != null) {
-                    if (value.length() != truncatedValue.length()) {
-                        // re-check that value matches that of primary. This must be done because value in index-key was
-                        // truncated, so it is possible to get a false-positive match
-                        for (Fragment fragment : doc.getFragments()) {
-                            if (fragment.getPath().equals(path)) {
-                                if (fragment.getValue().equals(value)) {
-                                    documents.add(doc);
-                                } else {
-                                    // false-positive-match, document should not be included
-                                }
-                                break;
-                            }
-                        }
-                    } else {
-                        documents.add(doc);
-                    }
-                } else {
-                    // TODO Remove fragment from index that match path, value, timestamp, and id.
+            documentFutures.add(findAnyOneMatchingFragmentInPrimary(transaction, primary, id, timestamp).thenCompose(kv -> {
+                Tuple keyTuple = primary.unpack(kv.getKey());
+                Tuple versionTuple = keyTuple.getNestedTuple(1);
+                if (!newestMatchingVersion.equals(versionTuple)) {
+                    return null; // false-positive index-match on older version
                 }
-                return doc;
+                return getDocument(transaction, namespace, entity, id, versionTuple).thenApply(doc -> {
+                    if (doc == null) {
+                        // TODO Consider queuing best-effort task for removal of fragment from index that match path, value, timestamp, and id.
+                        return null;
+                    }
+                    documents.add(doc);
+                    return doc;
+                });
             }));
         }
 
