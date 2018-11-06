@@ -270,7 +270,6 @@ public class FoundationDBPersistence implements Persistence {
     }
 
     CompletableFuture<List<Document>> doReadVersions(ReadTransaction transaction, ZonedDateTime from, ZonedDateTime to, String namespace, String entity, String id, int limit) {
-        // TODO use limit
         DirectorySubspace directorySubspace = getPrimary(namespace, entity);
 
         return findAnyOneMatchingFragmentInPrimary(transaction, directorySubspace, id, from).thenApply(aMatchingKeyValue -> {
@@ -287,23 +286,23 @@ public class FoundationDBPersistence implements Persistence {
                     KeySelector.firstGreaterOrEqual(directorySubspace.pack(Tuple.from(id, toTuple(to))))
             );
 
-            CompletableFuture<List<Document>> documents = getDocuments(namespace, entity, range);
+            CompletableFuture<List<Document>> documents = getDocuments(namespace, entity, range, limit);
             return documents.join();
         });
     }
 
-    private CompletableFuture<List<Document>> getDocuments(String namespace, String entity, AsyncIterable<KeyValue> range) {
+    private CompletableFuture<List<Document>> getDocuments(String namespace, String entity, AsyncIterable<KeyValue> range, int limit) {
         final DirectorySubspace primary = getPrimary(namespace, entity);
         final List<Document> documents = new ArrayList<>();
         final List<Fragment> fragments = new ArrayList<>();
         final AsyncIterator<KeyValue> iterator = range.iterator();
         final CompletableFuture<List<Document>> documentsCompletableFuture = new CompletableFuture<>();
         final AtomicReference<Tuple> prevVersionRef = new AtomicReference<>();
-        iterator.onHasNext().thenAccept(onNextFragment(namespace, entity, null, primary, documents, fragments, iterator, documentsCompletableFuture, prevVersionRef));
+        iterator.onHasNext().thenAccept(onNextFragment(namespace, entity, null, primary, documents, fragments, iterator, documentsCompletableFuture, prevVersionRef, limit));
         return documentsCompletableFuture;
     }
 
-    private Consumer<Boolean> onNextFragment(String namespace, String entity, String id, DirectorySubspace primary, List<Document> documents, List<Fragment> fragments, AsyncIterator<KeyValue> iterator, CompletableFuture<List<Document>> documentsCompletableFuture, AtomicReference<Tuple> prevVersionRef) {
+    private Consumer<Boolean> onNextFragment(String namespace, String entity, String id, DirectorySubspace primary, List<Document> documents, List<Fragment> fragments, AsyncIterator<KeyValue> iterator, CompletableFuture<List<Document>> documentsCompletableFuture, AtomicReference<Tuple> prevVersionRef, int limit) {
         return hasNext -> {
             try {
                 if (hasNext) {
@@ -327,7 +326,13 @@ public class FoundationDBPersistence implements Persistence {
                     }
                     fragments.add(new Fragment(path, value));
                     prevVersionRef.set(keyTuple.getNestedTuple(1));
-                    iterator.onHasNext().thenAccept(onNextFragment(namespace, entity, dbId, primary, documents, fragments, iterator, documentsCompletableFuture, prevVersionRef));
+                    if (documents.size() < limit) {
+                        iterator.onHasNext().thenAccept(onNextFragment(namespace, entity, dbId, primary, documents, fragments, iterator, documentsCompletableFuture, prevVersionRef, limit));
+                    } else {
+                        // limit reached
+                        documentsCompletableFuture.complete(documents);
+                        iterator.cancel();
+                    }
                 } else {
                     if (id != null) {
                         Document document;
@@ -352,7 +357,6 @@ public class FoundationDBPersistence implements Persistence {
     }
 
     List<Document> doReadAllVersions(ReadTransaction transaction, String namespace, String entity, String id, int limit) {
-        // TODO use limit
         DirectorySubspace primary = getPrimary(namespace, entity);
         /*
          * Get all fragments of all versions.
@@ -362,7 +366,7 @@ public class FoundationDBPersistence implements Persistence {
                 KeySelector.firstGreaterOrEqual(primary.pack(Tuple.from(id + " ")))
         );
 
-        CompletableFuture<List<Document>> documents = getDocuments(namespace, entity, range);
+        CompletableFuture<List<Document>> documents = getDocuments(namespace, entity, range, limit);
         return documents.join();
     }
 
@@ -508,7 +512,6 @@ public class FoundationDBPersistence implements Persistence {
     }
 
     List<Document> doFind(ReadTransaction transaction, ZonedDateTime timestamp, String namespace, String entity, String path, String value, int limit) {
-        // TODO use limit
         String arrayIndexUnawarePath = path.replaceAll(Fragment.arrayIndexPattern.pattern(), "[]");
         DirectorySubspace primary = getPrimary(namespace, entity);
         DirectorySubspace index = getIndex(namespace, entity, arrayIndexUnawarePath);
@@ -524,6 +527,12 @@ public class FoundationDBPersistence implements Persistence {
         Map<String, SortedSet<Tuple>> matchingVersionsById = new LinkedHashMap<>();
         while (rangeIterator.hasNext()) {
             KeyValue kv = rangeIterator.next();
+            if (matchingVersionsById.size() >= limit) {
+                // limit reached
+                // TODO: This does not necessarily give a document-list equal to limit. Caller should be notified that limit was reached.
+                rangeIterator.cancel();
+                break;
+            }
             if (kv.getValue().length > 0 && !value.equals(new String(kv.getValue(), StandardCharsets.UTF_8))) {
                 // false-positive match due to value truncation
                 continue;
