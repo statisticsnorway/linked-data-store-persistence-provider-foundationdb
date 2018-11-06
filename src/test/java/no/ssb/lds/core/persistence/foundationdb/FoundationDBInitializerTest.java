@@ -2,6 +2,7 @@ package no.ssb.lds.core.persistence.foundationdb;
 
 import no.ssb.lds.api.persistence.Document;
 import no.ssb.lds.api.persistence.Fragment;
+import no.ssb.lds.api.persistence.PersistenceDeletePolicy;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -25,6 +26,9 @@ public class FoundationDBInitializerTest {
                 Set.of("Person", "Address", "FunkyLongAddress"));
         ZonedDateTime jan1624 = ZonedDateTime.of(1624, 1, 1, 12, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
         ZonedDateTime jan1626 = ZonedDateTime.of(1626, 1, 1, 12, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
+        ZonedDateTime jan1663 = ZonedDateTime.of(1663, 1, 1, 0, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
+        ZonedDateTime feb1663 = ZonedDateTime.of(1663, 2, 1, 0, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
+        ZonedDateTime mar1663 = ZonedDateTime.of(1663, 3, 1, 0, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
         ZonedDateTime jan1664 = ZonedDateTime.of(1664, 1, 1, 12, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
         ZonedDateTime aug92 = ZonedDateTime.of(1992, 8, 1, 13, 43, 20, (int) TimeUnit.MILLISECONDS.toNanos(301), ZoneId.of("Etc/UTC"));
         ZonedDateTime sep94 = ZonedDateTime.of(1994, 9, 1, 13, 43, 20, (int) TimeUnit.MILLISECONDS.toNanos(301), ZoneId.of("Etc/UTC"));
@@ -116,7 +120,7 @@ public class FoundationDBInitializerTest {
         for (int i = 0; i < 12; i++) {
             bigString = bigString + "_" + bigString;
         }
-        persistence.createOrOverwrite(toDocument(namespace, "FunkyLongAddress", "newyork", createAddress(bigString, "NY", "USA"), now));
+        persistence.createOrOverwrite(toDocument(namespace, "FunkyLongAddress", "newyork", createAddress(bigString, "NY", "USA"), oct18));
         List<Document> shouldMatch = persistence.find(now, namespace, "FunkyLongAddress", "city", bigString, 100);
         if (shouldMatch.size() != 1) {
             throw new IllegalStateException("Test failed! " + shouldMatch.size());
@@ -125,6 +129,29 @@ public class FoundationDBInitializerTest {
         if (shouldNotMatch.size() != 0) {
             throw new IllegalStateException("Test failed! " + shouldNotMatch.size());
         }
+        persistence.delete(oct18, namespace, "FunkyLongAddress", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS);
+
+        System.out.println();
+        System.out.println("STATE BEFORE DELETE MARKER");
+        System.out.format("newyork jan 1663:      %s%n", persistence.read(jan1663, namespace, "Address", "newyork"));
+        System.out.format("newyork end jan 1663:  %s%n", persistence.read(feb1663.minus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork"));
+        System.out.format("newyork feb 1663:      %s%n", persistence.read(feb1663, namespace, "Address", "newyork"));
+        System.out.format("newyork tick feb 1663: %s%n", persistence.read(feb1663.plus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork"));
+        System.out.format("newyork mar 1663:      %s%n", persistence.read(mar1663, namespace, "Address", "newyork"));
+        System.out.format("newyork now     :      %s%n", persistence.read(now, namespace, "Address", "newyork"));
+        System.out.println();
+        System.out.println("Marking newyork as deleted as of feb 1663");
+
+        persistence.markDeleted(feb1663, namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS);
+
+        System.out.println();
+        System.out.println("STATE AFTER DELETE MARKER");
+        System.out.format("newyork jan 1663:      %s%n", persistence.read(jan1663, namespace, "Address", "newyork"));
+        System.out.format("newyork end jan 1663:  %s%n", persistence.read(feb1663.minus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork"));
+        System.out.format("newyork feb 1663:      %s%n", persistence.read(feb1663, namespace, "Address", "newyork"));
+        System.out.format("newyork tick feb 1663: %s%n", persistence.read(feb1663.plus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork"));
+        System.out.format("newyork mar 1663:      %s%n", persistence.read(mar1663, namespace, "Address", "newyork"));
+        System.out.format("newyork now     :      %s%n", persistence.read(now, namespace, "Address", "newyork"));
 
         persistence.close();
     }
@@ -147,7 +174,7 @@ public class FoundationDBInitializerTest {
     static Document toDocument(String namespace, String entity, String id, JSONObject json, ZonedDateTime timestamp) {
         List<Fragment> fragments = new ArrayList<>();
         addFragments("$.", json, fragments);
-        return new Document(namespace, entity, id, timestamp, fragments);
+        return new Document(namespace, entity, id, timestamp, fragments, false);
     }
 
     private static void addFragments(String pathPrefix, JSONObject json, List<Fragment> fragments) {

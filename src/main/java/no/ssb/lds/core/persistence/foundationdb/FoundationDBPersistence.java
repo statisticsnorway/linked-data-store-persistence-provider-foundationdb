@@ -34,10 +34,11 @@ import java.util.function.Consumer;
 
 public class FoundationDBPersistence implements Persistence {
 
+    static final String DELETED_MARKER = "DELETED";
     static final byte[] EMPTY_BYTE_ARRAY = new byte[0];
     static final ZoneId ZONE_ID_UTC = ZoneId.of("Etc/UTC");
-    private static final int MAX_KEY_LENGTH = 10000;
-    private static final int MAX_VALUE_LENGTH = 100000;
+    static final int MAX_KEY_LENGTH = 10000;
+    static final int MAX_VALUE_LENGTH = 100000;
 
     final Database db;
     final Directory directory;
@@ -163,6 +164,9 @@ public class FoundationDBPersistence implements Persistence {
                 return null;
             }
             Tuple version = directorySubspace.unpack(aMatchingKeyValue.getKey()).getNestedTuple(1);
+            if (DELETED_MARKER.equals(directorySubspace.unpack(aMatchingKeyValue.getKey()).getString(2))) {
+                return new Document(namespace, entity, id, toTimestamp(version), Collections.emptyList(), true);
+            }
 
             /*
              * Get document with given version.
@@ -200,7 +204,11 @@ public class FoundationDBPersistence implements Persistence {
                 } else {
                     Document document = null;
                     if (!fragments.isEmpty()) {
-                        document = new Document(namespace, entity, id, toTimestamp(version), fragments);
+                        if (DELETED_MARKER.equals(fragments.get(0).getPath())) {
+                            document = new Document(namespace, entity, id, toTimestamp(version), Collections.emptyList(), true);
+                        } else {
+                            document = new Document(namespace, entity, id, toTimestamp(version), fragments, false);
+                        }
                     }
                     documentCompletableFuture.complete(document);
                 }
@@ -307,7 +315,13 @@ public class FoundationDBPersistence implements Persistence {
                     Tuple timestampTuple = keyTuple.getNestedTuple(1);
                     if (id != null) {
                         if (!id.equals(dbId) || prevVersionRef.get() != null && !timestampTuple.equals(prevVersionRef.get())) {
-                            documents.add(new Document(namespace, entity, id, toTimestamp(prevVersionRef.get()), List.copyOf(fragments)));
+                            Document document;
+                            if (DELETED_MARKER.equals(fragments.get(0).getPath())) {
+                                document = new Document(namespace, entity, id, toTimestamp(prevVersionRef.get()), Collections.emptyList(), true);
+                            } else {
+                                document = new Document(namespace, entity, id, toTimestamp(prevVersionRef.get()), List.copyOf(fragments), false);
+                            }
+                            documents.add(document);
                             fragments.clear();
                         }
                     }
@@ -316,7 +330,13 @@ public class FoundationDBPersistence implements Persistence {
                     iterator.onHasNext().thenAccept(onNextFragment(namespace, entity, dbId, primary, documents, fragments, iterator, documentsCompletableFuture, prevVersionRef));
                 } else {
                     if (id != null) {
-                        documents.add(new Document(namespace, entity, id, toTimestamp(prevVersionRef.get()), List.copyOf(fragments)));
+                        Document document;
+                        if (DELETED_MARKER.equals(fragments.get(0).getPath())) {
+                            document = new Document(namespace, entity, id, toTimestamp(prevVersionRef.get()), Collections.emptyList(), true);
+                        } else {
+                            document = new Document(namespace, entity, id, toTimestamp(prevVersionRef.get()), List.copyOf(fragments), false);
+                        }
+                        documents.add(document);
                     }
                     documentsCompletableFuture.complete(documents);
                 }
@@ -347,13 +367,34 @@ public class FoundationDBPersistence implements Persistence {
     }
 
     @Override
-    public boolean delete(ZonedDateTime timestamp, String namespace, String entity, String id, PersistenceDeletePolicy policy) throws PersistenceException {
-        return false;
+    public void delete(ZonedDateTime timestamp, String namespace, String entity, String id, PersistenceDeletePolicy policy) throws PersistenceException {
     }
 
     @Override
-    public boolean markDeleted(ZonedDateTime timestamp, String namespace, String entity, String id, PersistenceDeletePolicy policy) throws PersistenceException {
-        return false;
+    public void markDeleted(ZonedDateTime timestamp, String namespace, String entity, String id, PersistenceDeletePolicy policy) throws PersistenceException {
+        db.run(transaction -> doMarkDeleted(transaction, timestamp, namespace, entity, id, policy));
+    }
+
+    Object doMarkDeleted(Transaction transaction, ZonedDateTime timestamp, String namespace, String entity, String id, PersistenceDeletePolicy policy) {
+        DirectorySubspace primary = getPrimary(namespace, entity);
+
+        Tuple timestampTuple = toTuple(timestamp);
+
+        // Clear primary of existing document with same version
+        transaction.clear(primary.range(Tuple.from(id, timestampTuple)));
+
+        /*
+         * PRIMARY
+         */
+        Tuple primaryKey = Tuple.from(
+                id,
+                timestampTuple,
+                DELETED_MARKER
+        );
+        byte[] binaryPrimaryKey = primary.pack(primaryKey);
+        transaction.set(binaryPrimaryKey, EMPTY_BYTE_ARRAY);
+
+        return null;
     }
 
     @Override
@@ -393,8 +434,13 @@ public class FoundationDBPersistence implements Persistence {
                     if (id != null) {
                         if (!id.equals(dbId) || (prevVersion != null && !versionTuple.equals(prevVersion))) {
                             if (!id.equals(dbId) || prevVersion.compareTo(timestampTuple) <= 0) {
-                                // TODO check when only one fragment in document
-                                documentById.put(id, new Document(namespace, entity, id, toTimestamp(prevVersion), List.copyOf(fragments)));
+                                Document document;
+                                if (DELETED_MARKER.equals(fragments.get(0).getPath())) {
+                                    document = new Document(namespace, entity, id, toTimestamp(prevVersion), Collections.emptyList(), true);
+                                } else {
+                                    document = new Document(namespace, entity, id, toTimestamp(prevVersion), List.copyOf(fragments), false);
+                                }
+                                documentById.put(id, document); // overwrite any earlier versions
                             }
                             fragments.clear();
                         }
@@ -409,7 +455,13 @@ public class FoundationDBPersistence implements Persistence {
                     }
                 } else {
                     if (id != null && prevVersion.compareTo(timestampTuple) <= 0) {
-                        documentById.put(id, new Document(namespace, entity, id, toTimestamp(prevVersion), List.copyOf(fragments)));
+                        Document document;
+                        if (DELETED_MARKER.equals(fragments.get(0).getPath())) {
+                            document = new Document(namespace, entity, id, toTimestamp(prevVersion), Collections.emptyList(), true);
+                        } else {
+                            document = new Document(namespace, entity, id, toTimestamp(prevVersion), List.copyOf(fragments), false);
+                        }
+                        documentById.put(id, document);
                     }
                     documentsCompletableFuture.complete(new ArrayList<>(documentById.values()));
                 }
@@ -458,6 +510,10 @@ public class FoundationDBPersistence implements Persistence {
                 Tuple versionTuple = keyTuple.getNestedTuple(1);
                 if (!newestMatchingVersion.equals(versionTuple)) {
                     return null; // false-positive index-match on older version
+                }
+                if (DELETED_MARKER.equals(keyTuple.getString(2))) {
+                    // TODO Consider queuing best-effort task for removal of fragment from index that match path, value, timestamp, and id.
+                    return CompletableFuture.completedFuture(new Document(namespace, entity, id, toTimestamp(versionTuple), Collections.emptyList(), true));
                 }
                 return getDocument(transaction, namespace, entity, id, versionTuple).thenApply(doc -> {
                     if (doc == null) {
