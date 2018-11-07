@@ -41,78 +41,78 @@ public class FoundationDBInitializerTest {
         ZonedDateTime oct18 = ZonedDateTime.of(2018, 10, 7, 19, 49, 26, (int) TimeUnit.MILLISECONDS.toNanos(307), ZoneId.of("Etc/UTC"));
         ZonedDateTime now = ZonedDateTime.now(ZoneId.of("Etc/UTC"));
         ZonedDateTime oneMillisecondAfterNow = now.plus(1, ChronoUnit.MILLIS);
-        persistence.createOrOverwrite(toDocument(namespace, "Address", "newyork", createAddress("", "NY", "USA"), jan1624));
-        persistence.createOrOverwrite(toDocument(namespace, "Address", "newyork", createAddress("New Amsterdam", "NY", "USA"), jan1626));
-        persistence.createOrOverwrite(toDocument(namespace, "Address", "newyork", createAddress("New York", "NY", "USA"), jan1664));
-        persistence.createOrOverwrite(toDocument(namespace, "Person", "john", createPerson("John", "Smith"), aug92));
-        persistence.createOrOverwrite(toDocument(namespace, "Person", "jane", createPerson("Jane", "Doe"), sep94));
-        persistence.createOrOverwrite(toDocument(namespace, "Person", "jane", createPerson("Jane", "Smith"), feb10));
-        persistence.createOrOverwrite(toDocument(namespace, "Person", "john", createPerson("James", "Smith"), nov13));
-        persistence.createOrOverwrite(toDocument(namespace, "Person", "john", createPerson("John", "Smith"), oct18));
+        persistence.createOrOverwrite(toDocument(namespace, "Address", "newyork", createAddress("", "NY", "USA"), jan1624)).join();
+        persistence.createOrOverwrite(toDocument(namespace, "Address", "newyork", createAddress("New Amsterdam", "NY", "USA"), jan1626)).join();
+        persistence.createOrOverwrite(toDocument(namespace, "Address", "newyork", createAddress("New York", "NY", "USA"), jan1664)).join();
+        persistence.createOrOverwrite(toDocument(namespace, "Person", "john", createPerson("John", "Smith"), aug92)).join();
+        persistence.createOrOverwrite(toDocument(namespace, "Person", "jane", createPerson("Jane", "Doe"), sep94)).join();
+        persistence.createOrOverwrite(toDocument(namespace, "Person", "jane", createPerson("Jane", "Smith"), feb10)).join();
+        persistence.createOrOverwrite(toDocument(namespace, "Person", "john", createPerson("James", "Smith"), nov13)).join();
+        persistence.createOrOverwrite(toDocument(namespace, "Person", "john", createPerson("John", "Smith"), oct18)).join();
         System.out.println();
         System.out.println("January 2000");
-        System.out.format("john:    %s%n", persistence.read(jan00, namespace, "Person", "john"));
-        System.out.format("jane:    %s%n", persistence.read(jan00, namespace, "Person", "jane"));
-        System.out.format("newyork: %s%n", persistence.read(jan00, namespace, "Address", "newyork"));
+        System.out.format("john:    %s%n", persistence.read(jan00, namespace, "Person", "john").join().getMatches().get(0));
+        System.out.format("jane:    %s%n", persistence.read(jan00, namespace, "Person", "jane").join().getMatches().get(0));
+        System.out.format("newyork: %s%n", persistence.read(jan00, namespace, "Address", "newyork").join().getMatches().get(0));
         System.out.println();
         System.out.println("April 2009");
-        System.out.format("john:    %s%n", persistence.read(apr09, namespace, "Person", "john"));
-        System.out.format("jane:    %s%n", persistence.read(apr09, namespace, "Person", "jane"));
-        System.out.format("newyork: %s%n", persistence.read(apr09, namespace, "Address", "newyork"));
+        System.out.format("john:    %s%n", persistence.read(apr09, namespace, "Person", "john").join().getMatches().get(0));
+        System.out.format("jane:    %s%n", persistence.read(apr09, namespace, "Person", "jane").join().getMatches().get(0));
+        System.out.format("newyork: %s%n", persistence.read(apr09, namespace, "Address", "newyork").join().getMatches().get(0));
         System.out.println();
         System.out.println("December 2011");
-        System.out.format("john:    %s%n", persistence.read(dec11, namespace, "Person", "john"));
-        System.out.format("jane:    %s%n", persistence.read(dec11, namespace, "Person", "jane"));
-        System.out.format("newyork: %s%n", persistence.read(dec11, namespace, "Address", "newyork"));
+        System.out.format("john:    %s%n", persistence.read(dec11, namespace, "Person", "john").join().getMatches().get(0));
+        System.out.format("jane:    %s%n", persistence.read(dec11, namespace, "Person", "jane").join().getMatches().get(0));
+        System.out.format("newyork: %s%n", persistence.read(dec11, namespace, "Address", "newyork").join().getMatches().get(0));
         System.out.println();
         System.out.println("September 2018");
-        System.out.format("john:    %s%n", persistence.read(sep18, namespace, "Person", "john"));
-        System.out.format("jane:    %s%n", persistence.read(sep18, namespace, "Person", "jane"));
-        System.out.format("newyork: %s%n", persistence.read(sep18, namespace, "Address", "newyork"));
+        System.out.format("john:    %s%n", persistence.read(sep18, namespace, "Person", "john").join().getMatches().get(0));
+        System.out.format("jane:    %s%n", persistence.read(sep18, namespace, "Person", "jane").join().getMatches().get(0));
+        System.out.format("newyork: %s%n", persistence.read(sep18, namespace, "Address", "newyork").join().getMatches().get(0));
         System.out.println();
         System.out.println("Now");
-        System.out.format("john:    %s%n", persistence.read(now, namespace, "Person", "john"));
-        System.out.format("jane:    %s%n", persistence.read(now, namespace, "Person", "jane"));
-        System.out.format("newyork: %s%n", persistence.read(now, namespace, "Address", "newyork"));
+        System.out.format("john:    %s%n", persistence.read(now, namespace, "Person", "john").join().getMatches().get(0));
+        System.out.format("jane:    %s%n", persistence.read(now, namespace, "Person", "jane").join().getMatches().get(0));
+        System.out.format("newyork: %s%n", persistence.read(now, namespace, "Address", "newyork").join().getMatches().get(0));
         System.out.println();
         System.out.println("Now + 1ms");
-        System.out.format("john:    %s%n", persistence.read(oneMillisecondAfterNow, namespace, "Person", "john"));
-        System.out.format("jane:    %s%n", persistence.read(oneMillisecondAfterNow, namespace, "Person", "jane"));
-        System.out.format("newyork: %s%n", persistence.read(oneMillisecondAfterNow, namespace, "Address", "newyork"));
+        System.out.format("john:    %s%n", persistence.read(oneMillisecondAfterNow, namespace, "Person", "john").join().getMatches().get(0));
+        System.out.format("jane:    %s%n", persistence.read(oneMillisecondAfterNow, namespace, "Person", "jane").join().getMatches().get(0));
+        System.out.format("newyork: %s%n", persistence.read(oneMillisecondAfterNow, namespace, "Address", "newyork").join().getMatches().get(0));
 
         System.out.println();
         System.out.println("ALL newyork");
-        for (Document document : persistence.readAllVersions(namespace, "Address", "newyork", 100)) {
+        for (Document document : persistence.readAllVersions(namespace, "Address", "newyork", 100).join().getMatches()) {
             System.out.println(document);
         }
 
         System.out.println();
         System.out.println("ALL john");
-        for (Document document : persistence.readAllVersions(namespace, "Person", "john", 100)) {
+        for (Document document : persistence.readAllVersions(namespace, "Person", "john", 100).join().getMatches()) {
             System.out.println(document);
         }
 
         System.out.println();
         System.out.println("ALL jane");
-        for (Document document : persistence.readAllVersions(namespace, "Person", "jane", 100)) {
+        for (Document document : persistence.readAllVersions(namespace, "Person", "jane", 100).join().getMatches()) {
             System.out.println(document);
         }
 
         System.out.println();
         System.out.format("John from %s to %s%n", feb10, sep18);
-        for (Document document : persistence.readVersions(feb10, sep18, namespace, "Person", "john", 100)) {
+        for (Document document : persistence.readVersions(feb10, sep18, namespace, "Person", "john", 100).join().getMatches()) {
             System.out.println(document);
         }
 
         System.out.println();
         System.out.format("All Persons with lastname Smith at %s%n", sep18);
-        for (Document document : persistence.find(sep18, namespace, "Person", "lastname", "Smith", 100)) {
+        for (Document document : persistence.find(sep18, namespace, "Person", "lastname", "Smith", 100).join().getMatches()) {
             System.out.println(document);
         }
 
         System.out.println();
         System.out.format("All Persons at %s%n", dec11);
-        for (Document document : persistence.findAll(dec11, namespace, "Person", 100)) {
+        for (Document document : persistence.findAll(dec11, namespace, "Person", 100).join().getMatches()) {
             System.out.println(document);
         }
 
@@ -121,67 +121,68 @@ public class FoundationDBInitializerTest {
             bigString = bigString + "_" + bigString;
         }
         System.out.println("Creating funky long address");
-        persistence.createOrOverwrite(toDocument(namespace, "FunkyLongAddress", "newyork", createAddress(bigString, "NY", "USA"), oct18));
+        persistence.createOrOverwrite(toDocument(namespace, "FunkyLongAddress", "newyork", createAddress(bigString, "NY", "USA"), oct18)).join();
+
         System.out.println("Finding funky long address by city");
-        List<Document> shouldMatch = persistence.find(now, namespace, "FunkyLongAddress", "city", bigString, 100);
+        List<Document> shouldMatch = persistence.find(now, namespace, "FunkyLongAddress", "city", bigString, 100).join().getMatches();
         if (shouldMatch.size() != 1) {
             throw new IllegalStateException("Test failed! " + shouldMatch.size());
         }
         System.out.println("Finding funky long address by city (with non-matching value)");
-        List<Document> shouldNotMatch = persistence.find(now, namespace, "FunkyLongAddress", "city", bigString + "1", 100);
+        List<Document> shouldNotMatch = persistence.find(now, namespace, "FunkyLongAddress", "city", bigString + "1", 100).join().getMatches();
         if (shouldNotMatch.size() != 0) {
             throw new IllegalStateException("Test failed! " + shouldNotMatch.size());
         }
         System.out.println("Deleting funky long address");
-        persistence.delete(oct18, namespace, "FunkyLongAddress", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS);
+        persistence.delete(oct18, namespace, "FunkyLongAddress", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
 
         System.out.println();
         System.out.println("STATE BEFORE DELETE MARKER");
-        System.out.format("newyork jan 1663:      %s%n", persistence.read(jan1663, namespace, "Address", "newyork"));
-        System.out.format("newyork end jan 1663:  %s%n", persistence.read(feb1663.minus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork"));
-        System.out.format("newyork feb 1663:      %s%n", persistence.read(feb1663, namespace, "Address", "newyork"));
-        System.out.format("newyork tick feb 1663: %s%n", persistence.read(feb1663.plus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork"));
-        System.out.format("newyork mar 1663:      %s%n", persistence.read(mar1663, namespace, "Address", "newyork"));
-        System.out.format("newyork now     :      %s%n", persistence.read(now, namespace, "Address", "newyork"));
+        System.out.format("newyork jan 1663:      %s%n", persistence.read(jan1663, namespace, "Address", "newyork").join().getMatches().get(0));
+        System.out.format("newyork end jan 1663:  %s%n", persistence.read(feb1663.minus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork").join().getMatches().get(0));
+        System.out.format("newyork feb 1663:      %s%n", persistence.read(feb1663, namespace, "Address", "newyork").join().getMatches().get(0));
+        System.out.format("newyork tick feb 1663: %s%n", persistence.read(feb1663.plus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork").join().getMatches().get(0));
+        System.out.format("newyork mar 1663:      %s%n", persistence.read(mar1663, namespace, "Address", "newyork").join().getMatches().get(0));
+        System.out.format("newyork now     :      %s%n", persistence.read(now, namespace, "Address", "newyork").join().getMatches().get(0));
 
         System.out.println();
         System.out.println("Marking newyork as deleted as of feb 1663");
-        persistence.markDeleted(feb1663, namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS);
+        persistence.markDeleted(feb1663, namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
 
         System.out.println();
         System.out.println("STATE AFTER DELETE MARKER");
-        System.out.format("newyork jan 1663:      %s%n", persistence.read(jan1663, namespace, "Address", "newyork"));
-        System.out.format("newyork end jan 1663:  %s%n", persistence.read(feb1663.minus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork"));
-        System.out.format("newyork feb 1663:      %s%n", persistence.read(feb1663, namespace, "Address", "newyork"));
-        System.out.format("newyork tick feb 1663: %s%n", persistence.read(feb1663.plus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork"));
-        System.out.format("newyork mar 1663:      %s%n", persistence.read(mar1663, namespace, "Address", "newyork"));
-        System.out.format("newyork now     :      %s%n", persistence.read(now, namespace, "Address", "newyork"));
+        System.out.format("newyork jan 1663:      %s%n", persistence.read(jan1663, namespace, "Address", "newyork").join().getMatches().get(0));
+        System.out.format("newyork end jan 1663:  %s%n", persistence.read(feb1663.minus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork").join().getMatches().get(0));
+        System.out.format("newyork feb 1663:      %s%n", persistence.read(feb1663, namespace, "Address", "newyork").join().getMatches().get(0));
+        System.out.format("newyork tick feb 1663: %s%n", persistence.read(feb1663.plus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork").join().getMatches().get(0));
+        System.out.format("newyork mar 1663:      %s%n", persistence.read(mar1663, namespace, "Address", "newyork").join().getMatches().get(0));
+        System.out.format("newyork now     :      %s%n", persistence.read(now, namespace, "Address", "newyork").join().getMatches().get(0));
 
         System.out.println();
         System.out.println("Deleting delete marker of feb 1663");
-        persistence.delete(feb1663, namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS);
+        persistence.delete(feb1663, namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
 
         System.out.println();
         System.out.println("STATE AFTER DELETE MARKER WAS DELETED");
-        System.out.format("newyork jan 1663:      %s%n", persistence.read(jan1663, namespace, "Address", "newyork"));
-        System.out.format("newyork end jan 1663:  %s%n", persistence.read(feb1663.minus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork"));
-        System.out.format("newyork feb 1663:      %s%n", persistence.read(feb1663, namespace, "Address", "newyork"));
-        System.out.format("newyork tick feb 1663: %s%n", persistence.read(feb1663.plus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork"));
-        System.out.format("newyork mar 1663:      %s%n", persistence.read(mar1663, namespace, "Address", "newyork"));
-        System.out.format("newyork now     :      %s%n", persistence.read(now, namespace, "Address", "newyork"));
+        System.out.format("newyork jan 1663:      %s%n", persistence.read(jan1663, namespace, "Address", "newyork").join().getMatches().get(0));
+        System.out.format("newyork end jan 1663:  %s%n", persistence.read(feb1663.minus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork").join().getMatches().get(0));
+        System.out.format("newyork feb 1663:      %s%n", persistence.read(feb1663, namespace, "Address", "newyork").join().getMatches().get(0));
+        System.out.format("newyork tick feb 1663: %s%n", persistence.read(feb1663.plus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork").join().getMatches().get(0));
+        System.out.format("newyork mar 1663:      %s%n", persistence.read(mar1663, namespace, "Address", "newyork").join().getMatches().get(0));
+        System.out.format("newyork now     :      %s%n", persistence.read(now, namespace, "Address", "newyork").join().getMatches().get(0));
 
         System.out.println();
         System.out.println("Re-introducing delete marker of feb 1663");
-        persistence.markDeleted(feb1663, namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS);
+        persistence.markDeleted(feb1663, namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
 
         System.out.println();
         System.out.println("STATE AFTER DELETE MARKER");
-        System.out.format("newyork jan 1663:      %s%n", persistence.read(jan1663, namespace, "Address", "newyork"));
-        System.out.format("newyork end jan 1663:  %s%n", persistence.read(feb1663.minus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork"));
-        System.out.format("newyork feb 1663:      %s%n", persistence.read(feb1663, namespace, "Address", "newyork"));
-        System.out.format("newyork tick feb 1663: %s%n", persistence.read(feb1663.plus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork"));
-        System.out.format("newyork mar 1663:      %s%n", persistence.read(mar1663, namespace, "Address", "newyork"));
-        System.out.format("newyork now     :      %s%n", persistence.read(now, namespace, "Address", "newyork"));
+        System.out.format("newyork jan 1663:      %s%n", persistence.read(jan1663, namespace, "Address", "newyork").join().getMatches().get(0));
+        System.out.format("newyork end jan 1663:  %s%n", persistence.read(feb1663.minus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork").join().getMatches().get(0));
+        System.out.format("newyork feb 1663:      %s%n", persistence.read(feb1663, namespace, "Address", "newyork").join().getMatches().get(0));
+        System.out.format("newyork tick feb 1663: %s%n", persistence.read(feb1663.plus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork").join().getMatches().get(0));
+        System.out.format("newyork mar 1663:      %s%n", persistence.read(mar1663, namespace, "Address", "newyork").join().getMatches().get(0));
+        System.out.format("newyork now     :      %s%n", persistence.read(now, namespace, "Address", "newyork").join().getMatches().get(0));
 
         persistence.close();
     }
