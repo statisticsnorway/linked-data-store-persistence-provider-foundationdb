@@ -3,118 +3,218 @@ package no.ssb.lds.core.persistence.foundationdb;
 import no.ssb.lds.api.persistence.Document;
 import no.ssb.lds.api.persistence.Fragment;
 import no.ssb.lds.api.persistence.PersistenceDeletePolicy;
+import no.ssb.lds.api.persistence.PersistenceResult;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.testng.annotations.AfterClass;
+import org.testng.annotations.BeforeClass;
+import org.testng.annotations.Test;
 
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
-import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.NavigableSet;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
+
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertTrue;
 
 public class FoundationDBInitializerTest {
 
-    public static void main(String[] args) {
-        String namespace = "sample-namespace-1";
-        FoundationDBPersistence persistence = new FoundationDBInitializer().initialize(
+    final String namespace = "lds-provider-fdb-testng-ns";
+    FoundationDBPersistence persistence = null;
+
+    @BeforeClass
+    public void setup() {
+        persistence = new FoundationDBInitializer().initialize(
                 namespace,
                 Map.of("node-prefix.hex", "3A",
                         "content-prefix.hex", "3B"),
                 Set.of("Person", "Address", "FunkyLongAddress"));
+    }
+
+    @AfterClass
+    public void teardown() {
+        persistence.close();
+    }
+
+    @Test
+    public void thatDeleteAllVersionsWorks() {
         ZonedDateTime jan1624 = ZonedDateTime.of(1624, 1, 1, 12, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
         ZonedDateTime jan1626 = ZonedDateTime.of(1626, 1, 1, 12, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
-        ZonedDateTime jan1663 = ZonedDateTime.of(1663, 1, 1, 0, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
-        ZonedDateTime feb1663 = ZonedDateTime.of(1663, 2, 1, 0, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
-        ZonedDateTime mar1663 = ZonedDateTime.of(1663, 3, 1, 0, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
         ZonedDateTime jan1664 = ZonedDateTime.of(1664, 1, 1, 12, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
-        ZonedDateTime aug92 = ZonedDateTime.of(1992, 8, 1, 13, 43, 20, (int) TimeUnit.MILLISECONDS.toNanos(301), ZoneId.of("Etc/UTC"));
-        ZonedDateTime sep94 = ZonedDateTime.of(1994, 9, 1, 13, 43, 20, (int) TimeUnit.MILLISECONDS.toNanos(301), ZoneId.of("Etc/UTC"));
-        ZonedDateTime jan00 = ZonedDateTime.of(2000, 1, 1, 13, 43, 20, (int) TimeUnit.MILLISECONDS.toNanos(301), ZoneId.of("Etc/UTC"));
-        ZonedDateTime apr09 = ZonedDateTime.of(2009, 4, 2, 14, 44, 21, (int) TimeUnit.MILLISECONDS.toNanos(302), ZoneId.of("Etc/UTC"));
-        ZonedDateTime feb10 = ZonedDateTime.of(2010, 2, 3, 15, 45, 22, (int) TimeUnit.MILLISECONDS.toNanos(303), ZoneId.of("Etc/UTC"));
-        ZonedDateTime dec11 = ZonedDateTime.of(2011, 12, 4, 16, 46, 23, (int) TimeUnit.MILLISECONDS.toNanos(304), ZoneId.of("Etc/UTC"));
-        ZonedDateTime nov13 = ZonedDateTime.of(2013, 11, 5, 17, 47, 24, (int) TimeUnit.MILLISECONDS.toNanos(305), ZoneId.of("Etc/UTC"));
-        ZonedDateTime sep18 = ZonedDateTime.of(2018, 9, 6, 18, 48, 25, (int) TimeUnit.MILLISECONDS.toNanos(306), ZoneId.of("Etc/UTC"));
+        Document input0 = toDocument(namespace, "Address", "newyork", createAddress("", "NY", "USA"), jan1624);
+        persistence.createOrOverwrite(input0).join();
+        Document input1 = toDocument(namespace, "Address", "newyork", createAddress("New Amsterdam", "NY", "USA"), jan1626);
+        persistence.createOrOverwrite(input1).join();
+        Document input2 = toDocument(namespace, "Address", "newyork", createAddress("New York", "NY", "USA"), jan1664);
+        persistence.createOrOverwrite(input2).join();
+        List<Document> outputAfterCreate = persistence.readAllVersions(namespace, "Address", "newyork", 100).join().getMatches();
+
+        assertTrue(outputAfterCreate.size() > 0);
+
+        persistence.deleteAllVersions(namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
+
+        List<Document> outputAfterDeleteAll = persistence.readAllVersions(namespace, "Address", "newyork", 100).join().getMatches();
+
+        assertEquals(outputAfterDeleteAll.size(), 0);
+    }
+
+    @Test
+    public void thatBasicCreateThenReadWorks() {
+        persistence.deleteAllVersions(namespace, "Person", "john", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
+
         ZonedDateTime oct18 = ZonedDateTime.of(2018, 10, 7, 19, 49, 26, (int) TimeUnit.MILLISECONDS.toNanos(307), ZoneId.of("Etc/UTC"));
-        ZonedDateTime now = ZonedDateTime.now(ZoneId.of("Etc/UTC"));
-        ZonedDateTime oneMillisecondAfterNow = now.plus(1, ChronoUnit.MILLIS);
+        Document input = toDocument(namespace, "Person", "john", createPerson("John", "Smith"), oct18);
+        persistence.createOrOverwrite(input).join();
+        PersistenceResult result = persistence.read(oct18, namespace, "Person", "john").join();
+        assertEquals(result.getMatches().size(), 1);
+        Document output = result.getMatches().get(0);
+        assertFalse(output == input);
+        assertEquals(output, input);
+    }
+
+    @Test
+    public void thatBasicTimeBasedVersioningWorks() {
+        persistence.deleteAllVersions(namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
+
+        ZonedDateTime jan1624 = ZonedDateTime.of(1624, 1, 1, 12, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
+        ZonedDateTime jan1626 = ZonedDateTime.of(1626, 1, 1, 12, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
+        ZonedDateTime jan1664 = ZonedDateTime.of(1664, 1, 1, 12, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
+        Document input0 = toDocument(namespace, "Address", "newyork", createAddress("", "NY", "USA"), jan1624);
+        persistence.createOrOverwrite(input0).join();
+        Document input1 = toDocument(namespace, "Address", "newyork", createAddress("New Amsterdam", "NY", "USA"), jan1626);
+        persistence.createOrOverwrite(input1).join();
+        Document input2 = toDocument(namespace, "Address", "newyork", createAddress("New York", "NY", "USA"), jan1664);
+        persistence.createOrOverwrite(input2).join();
+        List<Document> output = persistence.readAllVersions(namespace, "Address", "newyork", 100).join().getMatches();
+        assertEquals(output.get(0), input0);
+        assertEquals(output.get(1), input1);
+        assertEquals(output.get(2), input2);
+    }
+
+    @Test
+    public void thatDeleteMarkerWorks() {
+        persistence.deleteAllVersions(namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
+
+        ZonedDateTime jan1624 = ZonedDateTime.of(1624, 1, 1, 12, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
+        ZonedDateTime jan1626 = ZonedDateTime.of(1626, 1, 1, 12, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
+        ZonedDateTime feb1663 = ZonedDateTime.of(1663, 2, 1, 0, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
+        ZonedDateTime jan1664 = ZonedDateTime.of(1664, 1, 1, 12, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
+
         persistence.createOrOverwrite(toDocument(namespace, "Address", "newyork", createAddress("", "NY", "USA"), jan1624)).join();
         persistence.createOrOverwrite(toDocument(namespace, "Address", "newyork", createAddress("New Amsterdam", "NY", "USA"), jan1626)).join();
         persistence.createOrOverwrite(toDocument(namespace, "Address", "newyork", createAddress("New York", "NY", "USA"), jan1664)).join();
+
+        assertEquals(persistence.readAllVersions(namespace, "Address", "newyork", 100).join().getMatches().size(), 3);
+
+        persistence.markDeleted(feb1663, namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
+
+        assertEquals(persistence.readAllVersions(namespace, "Address", "newyork", 100).join().getMatches().size(), 4);
+
+        persistence.delete(feb1663, namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
+
+        assertEquals(persistence.readAllVersions(namespace, "Address", "newyork", 100).join().getMatches().size(), 3);
+
+        persistence.markDeleted(feb1663, namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
+
+        assertEquals(persistence.readAllVersions(namespace, "Address", "newyork", 100).join().getMatches().size(), 4);
+    }
+
+    @Test
+    public void thatReadVersionsInRangeWorks() {
+        persistence.deleteAllVersions(namespace, "Person", "john", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
+
+        ZonedDateTime aug92 = ZonedDateTime.of(1992, 8, 1, 13, 43, 20, (int) TimeUnit.MILLISECONDS.toNanos(301), ZoneId.of("Etc/UTC"));
+        ZonedDateTime feb10 = ZonedDateTime.of(2010, 2, 3, 15, 45, 22, (int) TimeUnit.MILLISECONDS.toNanos(303), ZoneId.of("Etc/UTC"));
+        ZonedDateTime nov13 = ZonedDateTime.of(2013, 11, 5, 17, 47, 24, (int) TimeUnit.MILLISECONDS.toNanos(305), ZoneId.of("Etc/UTC"));
+        ZonedDateTime sep18 = ZonedDateTime.of(2018, 9, 6, 18, 48, 25, (int) TimeUnit.MILLISECONDS.toNanos(306), ZoneId.of("Etc/UTC"));
+        ZonedDateTime oct18 = ZonedDateTime.of(2018, 10, 7, 19, 49, 26, (int) TimeUnit.MILLISECONDS.toNanos(307), ZoneId.of("Etc/UTC"));
+        persistence.createOrOverwrite(toDocument(namespace, "Person", "john", createPerson("John", "Smith"), aug92)).join();
+        persistence.createOrOverwrite(toDocument(namespace, "Person", "john", createPerson("James", "Smith"), nov13)).join();
+        persistence.createOrOverwrite(toDocument(namespace, "Person", "john", createPerson("John", "Smith"), oct18)).join();
+
+        List<Document> matches = persistence.readVersions(feb10, sep18, namespace, "Person", "john", 100).join().getMatches();
+        assertEquals(matches.size(), 2);
+    }
+
+
+    @Test
+    public void thatFindAllWithPathAndValueWorks() {
+        persistence.deleteAllVersions(namespace, "Person", "john", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
+        persistence.deleteAllVersions(namespace, "Person", "jane", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
+
+        ZonedDateTime aug92 = ZonedDateTime.of(1992, 8, 1, 13, 43, 20, (int) TimeUnit.MILLISECONDS.toNanos(301), ZoneId.of("Etc/UTC"));
+        ZonedDateTime sep94 = ZonedDateTime.of(1994, 9, 1, 13, 43, 20, (int) TimeUnit.MILLISECONDS.toNanos(301), ZoneId.of("Etc/UTC"));
+        ZonedDateTime feb10 = ZonedDateTime.of(2010, 2, 3, 15, 45, 22, (int) TimeUnit.MILLISECONDS.toNanos(303), ZoneId.of("Etc/UTC"));
+        ZonedDateTime nov13 = ZonedDateTime.of(2013, 11, 5, 17, 47, 24, (int) TimeUnit.MILLISECONDS.toNanos(305), ZoneId.of("Etc/UTC"));
+        ZonedDateTime sep18 = ZonedDateTime.of(2018, 9, 6, 18, 48, 25, (int) TimeUnit.MILLISECONDS.toNanos(306), ZoneId.of("Etc/UTC"));
+        ZonedDateTime oct18 = ZonedDateTime.of(2018, 10, 7, 19, 49, 26, (int) TimeUnit.MILLISECONDS.toNanos(307), ZoneId.of("Etc/UTC"));
         persistence.createOrOverwrite(toDocument(namespace, "Person", "john", createPerson("John", "Smith"), aug92)).join();
         persistence.createOrOverwrite(toDocument(namespace, "Person", "jane", createPerson("Jane", "Doe"), sep94)).join();
         persistence.createOrOverwrite(toDocument(namespace, "Person", "jane", createPerson("Jane", "Smith"), feb10)).join();
         persistence.createOrOverwrite(toDocument(namespace, "Person", "john", createPerson("James", "Smith"), nov13)).join();
         persistence.createOrOverwrite(toDocument(namespace, "Person", "john", createPerson("John", "Smith"), oct18)).join();
-        System.out.println();
-        System.out.println("January 2000");
-        System.out.format("john:    %s%n", persistence.read(jan00, namespace, "Person", "john").join().getMatches().get(0));
-        System.out.format("jane:    %s%n", persistence.read(jan00, namespace, "Person", "jane").join().getMatches().get(0));
-        System.out.format("newyork: %s%n", persistence.read(jan00, namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.println();
-        System.out.println("April 2009");
-        System.out.format("john:    %s%n", persistence.read(apr09, namespace, "Person", "john").join().getMatches().get(0));
-        System.out.format("jane:    %s%n", persistence.read(apr09, namespace, "Person", "jane").join().getMatches().get(0));
-        System.out.format("newyork: %s%n", persistence.read(apr09, namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.println();
-        System.out.println("December 2011");
-        System.out.format("john:    %s%n", persistence.read(dec11, namespace, "Person", "john").join().getMatches().get(0));
-        System.out.format("jane:    %s%n", persistence.read(dec11, namespace, "Person", "jane").join().getMatches().get(0));
-        System.out.format("newyork: %s%n", persistence.read(dec11, namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.println();
-        System.out.println("September 2018");
-        System.out.format("john:    %s%n", persistence.read(sep18, namespace, "Person", "john").join().getMatches().get(0));
-        System.out.format("jane:    %s%n", persistence.read(sep18, namespace, "Person", "jane").join().getMatches().get(0));
-        System.out.format("newyork: %s%n", persistence.read(sep18, namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.println();
-        System.out.println("Now");
-        System.out.format("john:    %s%n", persistence.read(now, namespace, "Person", "john").join().getMatches().get(0));
-        System.out.format("jane:    %s%n", persistence.read(now, namespace, "Person", "jane").join().getMatches().get(0));
-        System.out.format("newyork: %s%n", persistence.read(now, namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.println();
-        System.out.println("Now + 1ms");
-        System.out.format("john:    %s%n", persistence.read(oneMillisecondAfterNow, namespace, "Person", "john").join().getMatches().get(0));
-        System.out.format("jane:    %s%n", persistence.read(oneMillisecondAfterNow, namespace, "Person", "jane").join().getMatches().get(0));
-        System.out.format("newyork: %s%n", persistence.read(oneMillisecondAfterNow, namespace, "Address", "newyork").join().getMatches().get(0));
 
-        System.out.println();
-        System.out.println("ALL newyork");
-        for (Document document : persistence.readAllVersions(namespace, "Address", "newyork", 100).join().getMatches()) {
-            System.out.println(document);
-        }
+        List<Document> matches = persistence.find(sep18, namespace, "Person", "lastname", "Smith", 100).join().getMatches();
 
-        System.out.println();
-        System.out.println("ALL john");
-        for (Document document : persistence.readAllVersions(namespace, "Person", "john", 100).join().getMatches()) {
-            System.out.println(document);
-        }
+        assertEquals(matches.size(), 2);
 
-        System.out.println();
-        System.out.println("ALL jane");
-        for (Document document : persistence.readAllVersions(namespace, "Person", "jane", 100).join().getMatches()) {
-            System.out.println(document);
-        }
+        Document person1 = matches.get(0);
+        Document person2 = matches.get(1);
 
-        System.out.println();
-        System.out.format("John from %s to %s%n", feb10, sep18);
-        for (Document document : persistence.readVersions(feb10, sep18, namespace, "Person", "john", 100).join().getMatches()) {
-            System.out.println(document);
+        if (person1.getFragments().contains(new Fragment("firstname", "Jane"))) {
+            assertTrue(person2.getFragments().contains(new Fragment("firstname", "James")));
+        } else {
+            assertTrue(person1.getFragments().contains(new Fragment("firstname", "James")));
+            assertTrue(person2.getFragments().contains(new Fragment("firstname", "Jane")));
         }
+    }
 
-        System.out.println();
-        System.out.format("All Persons with lastname Smith at %s%n", sep18);
-        for (Document document : persistence.find(sep18, namespace, "Person", "lastname", "Smith", 100).join().getMatches()) {
-            System.out.println(document);
-        }
 
-        System.out.println();
-        System.out.format("All Persons at %s%n", dec11);
-        for (Document document : persistence.findAll(dec11, namespace, "Person", 100).join().getMatches()) {
-            System.out.println(document);
+    @Test
+    public void thatFindAllWorks() {
+        // TODO Support for deleting entire entity in one operation...
+        persistence.deleteAllVersions(namespace, "Person", "john", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
+        persistence.deleteAllVersions(namespace, "Person", "jane", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
+
+        ZonedDateTime aug92 = ZonedDateTime.of(1992, 8, 1, 13, 43, 20, (int) TimeUnit.MILLISECONDS.toNanos(301), ZoneId.of("Etc/UTC"));
+        ZonedDateTime sep94 = ZonedDateTime.of(1994, 9, 1, 13, 43, 20, (int) TimeUnit.MILLISECONDS.toNanos(301), ZoneId.of("Etc/UTC"));
+        ZonedDateTime feb10 = ZonedDateTime.of(2010, 2, 3, 15, 45, 22, (int) TimeUnit.MILLISECONDS.toNanos(303), ZoneId.of("Etc/UTC"));
+        ZonedDateTime dec11 = ZonedDateTime.of(2011, 12, 4, 16, 46, 23, (int) TimeUnit.MILLISECONDS.toNanos(304), ZoneId.of("Etc/UTC"));
+        ZonedDateTime nov13 = ZonedDateTime.of(2013, 11, 5, 17, 47, 24, (int) TimeUnit.MILLISECONDS.toNanos(305), ZoneId.of("Etc/UTC"));
+        ZonedDateTime oct18 = ZonedDateTime.of(2018, 10, 7, 19, 49, 26, (int) TimeUnit.MILLISECONDS.toNanos(307), ZoneId.of("Etc/UTC"));
+        persistence.createOrOverwrite(toDocument(namespace, "Person", "john", createPerson("John", "Smith"), aug92)).join();
+        persistence.createOrOverwrite(toDocument(namespace, "Person", "jane", createPerson("Jane", "Doe"), sep94)).join();
+        persistence.createOrOverwrite(toDocument(namespace, "Person", "jane", createPerson("Jane", "Smith"), feb10)).join();
+        persistence.createOrOverwrite(toDocument(namespace, "Person", "john", createPerson("James", "Smith"), nov13)).join();
+        persistence.createOrOverwrite(toDocument(namespace, "Person", "john", createPerson("John", "Smith"), oct18)).join();
+
+        List<Document> matches = persistence.findAll(dec11, namespace, "Person", 100).join().getMatches();
+
+        assertEquals(matches.size(), 2);
+
+        Document person1 = matches.get(0);
+        Document person2 = matches.get(1);
+
+        if (person1.getFragments().contains(new Fragment("firstname", "Jane"))) {
+            assertTrue(person2.getFragments().contains(new Fragment("firstname", "John")));
+        } else {
+            assertTrue(person1.getFragments().contains(new Fragment("firstname", "John")));
+            assertTrue(person2.getFragments().contains(new Fragment("firstname", "Jane")));
         }
+    }
+
+    @Test
+    public void thatBigValueWorks() {
+        persistence.deleteAllVersions(namespace, "FunkyLongAddress", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
+
+        ZonedDateTime oct18 = ZonedDateTime.of(2018, 10, 7, 19, 49, 26, (int) TimeUnit.MILLISECONDS.toNanos(307), ZoneId.of("Etc/UTC"));
+        ZonedDateTime now = ZonedDateTime.now(ZoneId.of("Etc/UTC"));
 
         String bigString = "12345678901234567890";
         for (int i = 0; i < 12; i++) {
@@ -136,55 +236,6 @@ public class FoundationDBInitializerTest {
         System.out.println("Deleting funky long address");
         persistence.delete(oct18, namespace, "FunkyLongAddress", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
 
-        System.out.println();
-        System.out.println("STATE BEFORE DELETE MARKER");
-        System.out.format("newyork jan 1663:      %s%n", persistence.read(jan1663, namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.format("newyork end jan 1663:  %s%n", persistence.read(feb1663.minus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.format("newyork feb 1663:      %s%n", persistence.read(feb1663, namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.format("newyork tick feb 1663: %s%n", persistence.read(feb1663.plus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.format("newyork mar 1663:      %s%n", persistence.read(mar1663, namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.format("newyork now     :      %s%n", persistence.read(now, namespace, "Address", "newyork").join().getMatches().get(0));
-
-        System.out.println();
-        System.out.println("Marking newyork as deleted as of feb 1663");
-        persistence.markDeleted(feb1663, namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
-
-        System.out.println();
-        System.out.println("STATE AFTER DELETE MARKER");
-        System.out.format("newyork jan 1663:      %s%n", persistence.read(jan1663, namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.format("newyork end jan 1663:  %s%n", persistence.read(feb1663.minus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.format("newyork feb 1663:      %s%n", persistence.read(feb1663, namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.format("newyork tick feb 1663: %s%n", persistence.read(feb1663.plus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.format("newyork mar 1663:      %s%n", persistence.read(mar1663, namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.format("newyork now     :      %s%n", persistence.read(now, namespace, "Address", "newyork").join().getMatches().get(0));
-
-        System.out.println();
-        System.out.println("Deleting delete marker of feb 1663");
-        persistence.delete(feb1663, namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
-
-        System.out.println();
-        System.out.println("STATE AFTER DELETE MARKER WAS DELETED");
-        System.out.format("newyork jan 1663:      %s%n", persistence.read(jan1663, namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.format("newyork end jan 1663:  %s%n", persistence.read(feb1663.minus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.format("newyork feb 1663:      %s%n", persistence.read(feb1663, namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.format("newyork tick feb 1663: %s%n", persistence.read(feb1663.plus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.format("newyork mar 1663:      %s%n", persistence.read(mar1663, namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.format("newyork now     :      %s%n", persistence.read(now, namespace, "Address", "newyork").join().getMatches().get(0));
-
-        System.out.println();
-        System.out.println("Re-introducing delete marker of feb 1663");
-        persistence.markDeleted(feb1663, namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
-
-        System.out.println();
-        System.out.println("STATE AFTER DELETE MARKER");
-        System.out.format("newyork jan 1663:      %s%n", persistence.read(jan1663, namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.format("newyork end jan 1663:  %s%n", persistence.read(feb1663.minus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.format("newyork feb 1663:      %s%n", persistence.read(feb1663, namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.format("newyork tick feb 1663: %s%n", persistence.read(feb1663.plus(1, ChronoUnit.MILLIS), namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.format("newyork mar 1663:      %s%n", persistence.read(mar1663, namespace, "Address", "newyork").join().getMatches().get(0));
-        System.out.format("newyork now     :      %s%n", persistence.read(now, namespace, "Address", "newyork").join().getMatches().get(0));
-
-        persistence.close();
     }
 
     static JSONObject createPerson(String firstname, String lastname) {
@@ -203,12 +254,12 @@ public class FoundationDBInitializerTest {
     }
 
     static Document toDocument(String namespace, String entity, String id, JSONObject json, ZonedDateTime timestamp) {
-        List<Fragment> fragments = new ArrayList<>();
+        NavigableSet<Fragment> fragments = new TreeSet<>();
         addFragments("$.", json, fragments);
         return new Document(namespace, entity, id, timestamp, fragments, false);
     }
 
-    private static void addFragments(String pathPrefix, JSONObject json, List<Fragment> fragments) {
+    private static void addFragments(String pathPrefix, JSONObject json, NavigableSet<Fragment> fragments) {
         for (Map.Entry<String, Object> entry : json.toMap().entrySet()) {
             String key = entry.getKey();
             Object untypedValue = entry.getValue();

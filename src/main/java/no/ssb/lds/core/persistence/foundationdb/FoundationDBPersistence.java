@@ -3,6 +3,7 @@ package no.ssb.lds.core.persistence.foundationdb;
 import com.apple.foundationdb.Database;
 import com.apple.foundationdb.KeySelector;
 import com.apple.foundationdb.KeyValue;
+import com.apple.foundationdb.Range;
 import com.apple.foundationdb.ReadTransaction;
 import com.apple.foundationdb.Transaction;
 import com.apple.foundationdb.async.AsyncIterable;
@@ -164,23 +165,21 @@ public class FoundationDBPersistence implements Persistence {
         /*
          * Determine the correct version timestamp of the document to use. Will perform a database access and fetch at most one key-value
          */
-        CompletableFuture<PersistenceResult> matchingDocument = findAnyOneMatchingFragmentInPrimary(statistics, transaction, primary, id, toTuple(timestamp)).thenApply(aMatchingKeyValue -> {
+        return findAnyOneMatchingFragmentInPrimary(statistics, transaction, primary, id, toTuple(timestamp)).thenCompose(aMatchingKeyValue -> {
             if (aMatchingKeyValue == null) {
                 // document not found
-                return PersistenceResult.readResult(null, statistics);
+                return CompletableFuture.completedFuture(PersistenceResult.readResult(null, statistics));
             }
             Tuple version = primary.unpack(aMatchingKeyValue.getKey()).getNestedTuple(1);
             if (DELETED_MARKER.equals(primary.unpack(aMatchingKeyValue.getKey()).getString(2))) {
-                return PersistenceResult.readResult(new Document(namespace, entity, id, toTimestamp(version), Collections.emptyList(), true), statistics);
+                return CompletableFuture.completedFuture(PersistenceResult.readResult(new Document(namespace, entity, id, toTimestamp(version), Collections.emptyNavigableSet(), true), statistics));
             }
 
             /*
              * Get document with given version.
              */
-            CompletableFuture<Document> document = getDocument(transaction, statistics, namespace, entity, id, version);
-            return PersistenceResult.readResult(document.join(), statistics);
+            return getDocument(transaction, statistics, namespace, entity, id, version).thenApply(document -> PersistenceResult.readResult(document, statistics));
         });
-        return matchingDocument;
     }
 
     private CompletableFuture<Document> getDocument(ReadTransaction transaction, FoundationDBStatistics statistics, String namespace, String entity, String id, Tuple version) {
@@ -192,13 +191,13 @@ public class FoundationDBPersistence implements Persistence {
         );
         statistics.getRange(PRIMARY_INDEX);
         AsyncIterator<KeyValue> iterator = range.iterator();
-        final List<Fragment> fragments = Collections.synchronizedList(new ArrayList<>());
+        final NavigableSet<Fragment> fragments = Collections.synchronizedNavigableSet(new TreeSet<>());
         final CompletableFuture<Document> documentCompletableFuture = new CompletableFuture<>();
-        iterator.onHasNext().thenAccept(getBooleanConsumer(statistics, iterator, documentCompletableFuture, fragments, primary, namespace, entity, id, version));
+        iterator.onHasNext().thenAccept(deleteAllVersionsOnFragment(statistics, iterator, documentCompletableFuture, fragments, primary, namespace, entity, id, version));
         return documentCompletableFuture;
     }
 
-    private Consumer<Boolean> getBooleanConsumer(FoundationDBStatistics statistics, AsyncIterator<KeyValue> iterator, CompletableFuture<Document> documentCompletableFuture, List<Fragment> fragments, DirectorySubspace primary, String namespace, String entity, String id, Tuple version) {
+    private Consumer<Boolean> deleteAllVersionsOnFragment(FoundationDBStatistics statistics, AsyncIterator<KeyValue> iterator, CompletableFuture<Document> documentCompletableFuture, NavigableSet<Fragment> fragments, DirectorySubspace primary, String namespace, String entity, String id, Tuple version) {
         return hasNext -> {
             try {
                 if (hasNext) {
@@ -208,12 +207,12 @@ public class FoundationDBPersistence implements Persistence {
                     String value = new String(kv.getValue(), StandardCharsets.UTF_8);
                     String path = keyTuple.getString(2);
                     fragments.add(new Fragment(path, value));
-                    iterator.onHasNext().thenAccept(getBooleanConsumer(statistics, iterator, documentCompletableFuture, fragments, primary, namespace, entity, id, version));
+                    iterator.onHasNext().thenAccept(deleteAllVersionsOnFragment(statistics, iterator, documentCompletableFuture, fragments, primary, namespace, entity, id, version));
                 } else {
                     Document document = null;
                     if (!fragments.isEmpty()) {
-                        if (DELETED_MARKER.equals(fragments.get(0).getPath())) {
-                            document = new Document(namespace, entity, id, toTimestamp(version), Collections.emptyList(), true);
+                        if (DELETED_MARKER.equals(fragments.first().getPath())) {
+                            document = new Document(namespace, entity, id, toTimestamp(version), Collections.emptyNavigableSet(), true);
                         } else {
                             document = new Document(namespace, entity, id, toTimestamp(version), fragments, false);
                         }
@@ -258,6 +257,8 @@ public class FoundationDBPersistence implements Persistence {
             }
             KeyValue kv = keyValues.get(0);
             try {
+                // TODO check whether we are still in key-space explicitly before parsing key according to PRIMARY
+                // TODO layout. This will improve case (3) to cover all corner-cases.
                 Tuple keyTuple = primary.unpack(kv.getKey());
                 String resourceId = keyTuple.getString(0);
                 if (!id.equals(resourceId)) {
@@ -332,9 +333,9 @@ public class FoundationDBPersistence implements Persistence {
                             }
                             Document document;
                             if (DELETED_MARKER.equals(fragments.get(0).getPath())) {
-                                document = new Document(namespace, entity, id, toTimestamp(prevVersionRef.get()), Collections.emptyList(), true);
+                                document = new Document(namespace, entity, id, toTimestamp(prevVersionRef.get()), Collections.emptyNavigableSet(), true);
                             } else {
-                                document = new Document(namespace, entity, id, toTimestamp(prevVersionRef.get()), List.copyOf(fragments), false);
+                                document = new Document(namespace, entity, id, toTimestamp(prevVersionRef.get()), new TreeSet<>(fragments), false);
                             }
                             documents.add(document);
                             fragments.clear();
@@ -349,9 +350,9 @@ public class FoundationDBPersistence implements Persistence {
                     if (id != null) {
                         Document document;
                         if (DELETED_MARKER.equals(fragments.get(0).getPath())) {
-                            document = new Document(namespace, entity, id, toTimestamp(prevVersionRef.get()), Collections.emptyList(), true);
+                            document = new Document(namespace, entity, id, toTimestamp(prevVersionRef.get()), Collections.emptyNavigableSet(), true);
                         } else {
-                            document = new Document(namespace, entity, id, toTimestamp(prevVersionRef.get()), List.copyOf(fragments), false);
+                            document = new Document(namespace, entity, id, toTimestamp(prevVersionRef.get()), new TreeSet<>(fragments), false);
                         }
                         documents.add(document);
                     }
@@ -423,6 +424,63 @@ public class FoundationDBPersistence implements Persistence {
     }
 
     @Override
+    public CompletableFuture<PersistenceResult> deleteAllVersions(String namespace, String entity, String id, PersistenceDeletePolicy policy) throws PersistenceException {
+        return db.runAsync(transaction -> deleteAllVersions(transaction, new FoundationDBStatistics(), namespace, entity, id, policy));
+    }
+
+    private CompletableFuture<PersistenceResult> deleteAllVersions(Transaction transaction, FoundationDBStatistics statistics, String namespace, String entity, String id, PersistenceDeletePolicy policy) {
+        DirectorySubspace primary = getPrimary(namespace, entity);
+
+        /*
+         * Get all fragments of all versions.
+         */
+        Range range = primary.range(Tuple.from(id));
+        AsyncIterator<KeyValue> iterator = transaction.getRange(range).iterator();
+        statistics.getRange(PRIMARY_INDEX);
+
+        CompletableFuture<Void> result = new CompletableFuture<>();
+
+        iterator.onHasNext().thenAccept(deleteAllVersionsOnFragment(result, transaction, statistics, namespace, entity, id, primary, iterator));
+
+        return result.thenApply(v -> {
+            transaction.clear(range);
+            return PersistenceResult.writeResult(statistics);
+        });
+    }
+
+    private Consumer<Boolean> deleteAllVersionsOnFragment(CompletableFuture<Void> result, Transaction transaction, FoundationDBStatistics statistics, String namespace, String entity, String id, DirectorySubspace primary, AsyncIterator<KeyValue> iterator) {
+        return hasNext -> {
+            try {
+                if (!hasNext) {
+                    result.complete(null);
+                    return;
+                }
+                KeyValue kv = iterator.next();
+                Tuple key = primary.unpack(kv.getKey());
+                String path = key.getString(2);
+                Fragment fragment = new Fragment(path, new String(kv.getValue(), StandardCharsets.UTF_8));
+                String truncatedValue = truncateToMaxKeyLength(fragment.getValue());
+                Tuple version = key.getNestedTuple(1);
+                Tuple arrayIndices = Tuple.from(fragment.getArrayIndices());
+                Tuple valueIndexKey = Tuple.from(
+                        truncatedValue,
+                        id,
+                        version,
+                        arrayIndices
+                );
+                DirectorySubspace index = getIndex(namespace, entity, fragment.getArrayIndicesUnawarePath());
+                byte[] binaryValueIndexKey = index.pack(valueIndexKey);
+                transaction.clear(binaryValueIndexKey);
+                statistics.clearKeyValue(PATH_VALUE_INDEX);
+                iterator.onHasNext().thenAccept(deleteAllVersionsOnFragment(result, transaction, statistics, namespace, entity, id, primary, iterator));
+            } catch (Throwable t) {
+                result.completeExceptionally(t);
+            }
+        };
+    }
+
+
+    @Override
     public CompletableFuture<PersistenceResult> markDeleted(ZonedDateTime timestamp, String namespace, String entity, String id, PersistenceDeletePolicy policy) throws PersistenceException {
         return db.runAsync(transaction -> doMarkDeleted(transaction, new FoundationDBStatistics(), timestamp, namespace, entity, id, policy));
     }
@@ -492,9 +550,9 @@ public class FoundationDBPersistence implements Persistence {
                             if (!id.equals(dbId) || prevVersion.compareTo(timestampTuple) <= 0) {
                                 Document document;
                                 if (DELETED_MARKER.equals(fragments.get(0).getPath())) {
-                                    document = new Document(namespace, entity, id, toTimestamp(prevVersion), Collections.emptyList(), true);
+                                    document = new Document(namespace, entity, id, toTimestamp(prevVersion), Collections.emptyNavigableSet(), true);
                                 } else {
-                                    document = new Document(namespace, entity, id, toTimestamp(prevVersion), List.copyOf(fragments), false);
+                                    document = new Document(namespace, entity, id, toTimestamp(prevVersion), new TreeSet<>(fragments), false);
                                 }
                                 documentById.put(id, document); // overwrite any earlier versions
                             }
@@ -514,9 +572,9 @@ public class FoundationDBPersistence implements Persistence {
                     if (id != null && prevVersion.compareTo(timestampTuple) <= 0) {
                         Document document;
                         if (DELETED_MARKER.equals(fragments.get(0).getPath())) {
-                            document = new Document(namespace, entity, id, toTimestamp(prevVersion), Collections.emptyList(), true);
+                            document = new Document(namespace, entity, id, toTimestamp(prevVersion), Collections.emptyNavigableSet(), true);
                         } else {
-                            document = new Document(namespace, entity, id, toTimestamp(prevVersion), List.copyOf(fragments), false);
+                            document = new Document(namespace, entity, id, toTimestamp(prevVersion), new TreeSet<>(fragments), false);
                         }
                         documentById.put(id, document);
                     }
@@ -646,12 +704,19 @@ public class FoundationDBPersistence implements Persistence {
                     return null; // false-positive index-match on older version
                 }
                 if (DELETED_MARKER.equals(keyTuple.getString(2))) {
-                    // TODO Consider queuing best-effort task for removal of fragment from index that match path, value, timestamp, and id.
-                    return CompletableFuture.completedFuture(new Document(namespace, entity, id, toTimestamp(versionTuple), Collections.emptyList(), true));
+                    // Version was overwritten in primary by a delete-marker, schedule task to remove index fragment.
+                    db.runAsync(trn -> doClearKeyValue(trn, aMatchingFragmentKv)).exceptionally(throwable -> {
+                        throwable.printStackTrace();
+                        return null;
+                    });
+                    return CompletableFuture.completedFuture(new Document(namespace, entity, id, toTimestamp(versionTuple), Collections.emptyNavigableSet(), true));
                 }
                 return getDocument(transaction, statistics, namespace, entity, id, versionTuple).thenApply(doc -> {
                     if (doc == null) {
-                        // TODO Consider queuing best-effort task for removal of fragment from index that match path, value, timestamp, and id.
+                        db.runAsync(trn -> doClearKeyValue(trn, aMatchingFragmentKv)).exceptionally(throwable -> {
+                            throwable.printStackTrace();
+                            return null;
+                        });
                         return null;
                     }
                     documents.add(doc);
@@ -671,6 +736,14 @@ public class FoundationDBPersistence implements Persistence {
             CompletableFuture.allOf(primaryLookupFutures.toArray(CompletableFuture[]::new)).join();
             result.complete(PersistenceResult.readResult(List.copyOf(documents), false, statistics));
         }
+
+    }
+
+    private CompletableFuture<PersistenceResult> doClearKeyValue(Transaction trn, KeyValue aMatchingFragmentKv) {
+        FoundationDBStatistics stat = new FoundationDBStatistics();
+        trn.clear(aMatchingFragmentKv.getKey());
+        stat.clearKeyValue(PATH_VALUE_INDEX);
+        return CompletableFuture.completedFuture(PersistenceResult.writeResult(stat));
     }
 
     @Override
