@@ -7,7 +7,6 @@ import com.apple.foundationdb.directory.DirectoryLayer;
 import com.apple.foundationdb.subspace.Subspace;
 import no.ssb.lds.api.persistence.PersistenceInitializer;
 
-import java.util.Collections;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -20,18 +19,21 @@ public class FoundationDBInitializer implements PersistenceInitializer {
 
     @Override
     public Set<String> configurationKeys() {
-        return Collections.emptySet();
+        return Set.of(
+                "foundationdb.directory.node-prefix.hex",
+                "foundationdb.directory.content-prefix.hex"
+        );
     }
 
     @Override
     public FoundationDBPersistence initialize(String defaultNamespace, Map<String, String> configuration, Set<String> managedDomains) {
         FDB fdb = FDB.selectAPIVersion(520);
         Database db = fdb.open();
-        String nodePrefixHex = configuration.get("node-prefix.hex");
+        String nodePrefixHex = configuration.get("foundationdb.directory.node-prefix.hex");
         if (nodePrefixHex == null || nodePrefixHex.isBlank()) {
             nodePrefixHex = "0x23"; // default
         }
-        String contentPrefixHex = configuration.get("content-prefix.hex");
+        String contentPrefixHex = configuration.get("foundationdb.directory.content-prefix.hex");
         if (contentPrefixHex == null || contentPrefixHex.isBlank()) {
             contentPrefixHex = "0x24";  // default
         }

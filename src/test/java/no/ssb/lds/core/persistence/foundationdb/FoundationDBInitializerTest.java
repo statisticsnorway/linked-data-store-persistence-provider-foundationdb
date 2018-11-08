@@ -32,8 +32,8 @@ public class FoundationDBInitializerTest {
     public void setup() {
         persistence = new FoundationDBInitializer().initialize(
                 namespace,
-                Map.of("node-prefix.hex", "3A",
-                        "content-prefix.hex", "3B"),
+                Map.of("foundationdb.directory.node-prefix.hex", "3A",
+                        "foundationdb.directory.content-prefix.hex", "3B"),
                 Set.of("Person", "Address", "FunkyLongAddress"));
     }
 
