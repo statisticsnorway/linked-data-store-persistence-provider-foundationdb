@@ -9,11 +9,6 @@ class FoundationDBStatistics extends PersistenceStatistics {
         return this;
     }
 
-    public FoundationDBStatistics clearRangeStartsWith(String index) {
-        add(index + " clear-range-starts-with", 1);
-        return this;
-    }
-
     public FoundationDBStatistics clearKeyValue(String index) {
         add(index + " clear key-value", 1);
         return this;
