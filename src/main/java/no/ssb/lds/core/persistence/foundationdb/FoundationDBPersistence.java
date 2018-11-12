@@ -26,6 +26,7 @@ import java.nio.charset.CoderResult;
 import java.nio.charset.StandardCharsets;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -48,7 +49,7 @@ public class FoundationDBPersistence implements Persistence {
 
     final Database db;
     final Directory directory;
-    final Map<Tuple, DirectorySubspace> directorySubspaceByDomainByNamespace = new ConcurrentHashMap<>();
+    final Map<Tuple, DirectorySubspace> directorySubspaceByPaths = new ConcurrentHashMap<>();
 
     public FoundationDBPersistence(Database db, Directory directory) {
         this.db = db;
@@ -64,7 +65,7 @@ public class FoundationDBPersistence implements Persistence {
      * @return
      */
     DirectorySubspace getPrimary(String namespace, String entity) {
-        return createOrOpenDirectorySubspace(Tuple.from(namespace, "Primary", entity));
+        return createOrOpenDirectorySubspace(Tuple.from(namespace, PRIMARY_INDEX, entity));
     }
 
     /**
@@ -77,12 +78,12 @@ public class FoundationDBPersistence implements Persistence {
      * @return
      */
     DirectorySubspace getIndex(String namespace, String entity, String path) {
-        return createOrOpenDirectorySubspace(Tuple.from(namespace, "PathIndex", entity, path));
+        return createOrOpenDirectorySubspace(Tuple.from(namespace, PATH_VALUE_INDEX, entity, path));
     }
 
     DirectorySubspace createOrOpenDirectorySubspace(Tuple key) {
         // To create a nested subdirectory per tuple item, use: directory.createOrOpen(db, t.stream().map(o -> (String) o).collect(Collectors.toList())
-        return directorySubspaceByDomainByNamespace.computeIfAbsent(key, t -> directory.createOrOpen(db, List.of(t.toString())).join());
+        return directorySubspaceByPaths.computeIfAbsent(key, t -> directory.createOrOpen(db, List.of(t.toString())).join());
     }
 
     @Override
@@ -191,10 +192,14 @@ public class FoundationDBPersistence implements Persistence {
         return findAnyOneMatchingFragmentInPrimary(statistics, transaction, primary, id, snapshot).thenCompose(aMatchingKeyValue -> {
             if (aMatchingKeyValue == null) {
                 // document not found
-                return CompletableFuture.completedFuture(PersistenceResult.readResult(null, statistics));
+                return CompletableFuture.completedFuture(PersistenceResult.readResult(Collections.emptyList(), false, statistics));
             }
-            Tuple version = primary.unpack(aMatchingKeyValue.getKey()).getNestedTuple(1);
-            if (DELETED_MARKER.equals(primary.unpack(aMatchingKeyValue.getKey()).getString(2))) {
+            if (!primary.contains(aMatchingKeyValue.getKey())) {
+                return CompletableFuture.completedFuture(PersistenceResult.readResult(Collections.emptyList(), false, statistics));
+            }
+            Tuple key = primary.unpack(aMatchingKeyValue.getKey());
+            Tuple version = key.getNestedTuple(1);
+            if (DELETED_MARKER.equals(key.getString(2))) {
                 return CompletableFuture.completedFuture(PersistenceResult.readResult(new Document(namespace, entity, id, toTimestamp(version), Collections.emptyMap(), true), statistics));
             }
 
@@ -251,17 +256,14 @@ public class FoundationDBPersistence implements Persistence {
                 return null;
             }
             KeyValue kv = keyValues.get(0);
-            try {
-                // TODO check whether we are still in key-space explicitly before parsing key according to PRIMARY
-                // TODO layout. This will improve case (3) to cover all corner-cases.
-                Tuple keyTuple = primary.unpack(kv.getKey());
-                String resourceId = keyTuple.getString(0);
-                if (!id.equals(resourceId)) {
-                    // (2) fragment of an unrelated resource
-                    return null;
-                }
-            } catch (RuntimeException e) {
+            if (!primary.contains(kv.getKey())) {
                 // (3) KeyValue of another key-space than PRIMARY
+                return null;
+            }
+            Tuple keyTuple = primary.unpack(kv.getKey());
+            String resourceId = keyTuple.getString(0);
+            if (!id.equals(resourceId)) {
+                // (2) fragment of an unrelated resource
                 return null;
             }
 
@@ -280,6 +282,9 @@ public class FoundationDBPersistence implements Persistence {
         return findAnyOneMatchingFragmentInPrimary(statistics, transaction, primary, id, snapshotFrom).thenCompose(aMatchingKeyValue -> {
             if (aMatchingKeyValue == null) {
                 return CompletableFuture.completedFuture(PersistenceResult.readResult(Collections.emptyList(), false, statistics)); // no documents found
+            }
+            if (!primary.contains(aMatchingKeyValue.getKey())) {
+                return CompletableFuture.completedFuture(PersistenceResult.readResult(Collections.emptyList(), false, statistics));
             }
             Tuple firstMatchingVersion = primary.unpack(aMatchingKeyValue.getKey()).getNestedTuple(1);
 
@@ -437,7 +442,7 @@ public class FoundationDBPersistence implements Persistence {
         transaction.set(binaryPrimaryKey, EMPTY_BYTE_ARRAY);
         statistics.setKeyValue(PRIMARY_INDEX);
 
-        return CompletableFuture.completedFuture(PersistenceResult.writeResult());
+        return CompletableFuture.completedFuture(PersistenceResult.writeResult(statistics));
     }
 
     @Override
@@ -466,7 +471,7 @@ public class FoundationDBPersistence implements Persistence {
     }
 
     CompletableFuture<PersistenceResult> doFind(ReadTransaction transaction, FoundationDBStatistics statistics, Tuple snapshot, String namespace, String entity, String path, String value, int limit) {
-        String arrayIndexUnawarePath = path.replaceAll(Fragment.arrayIndexPattern.pattern(), "[]");
+        String arrayIndexUnawarePath = Fragment.computeIndexUnawarePath(path, new ArrayList<>());
         DirectorySubspace primary = getPrimary(namespace, entity);
         DirectorySubspace index = getIndex(namespace, entity, arrayIndexUnawarePath);
         String truncatedValue = truncateToMaxKeyLength(value);
