@@ -10,11 +10,16 @@ import no.ssb.lds.api.persistence.PersistenceStatistics;
 import java.nio.charset.CharsetEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.Flow;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.EMPTY_BYTE_ARRAY;
@@ -25,18 +30,46 @@ import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.t
 
 public class CreateOrOverwriteSubscriber implements Flow.Subscriber<Fragment> {
 
+    static final Fragment ON_COMPLETE = new Fragment(null, null, null, null, null, -90123, null);
+
+    static class OnNextElement {
+        final Fragment fragment;
+        final CompletableFuture<Fragment> future;
+
+        OnNextElement(Fragment fragment) {
+            this.fragment = fragment;
+            this.future = new CompletableFuture<>();
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            OnNextElement that = (OnNextElement) o;
+            return Objects.equals(fragment, that.fragment);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(fragment);
+        }
+    }
+
     final FoundationDBPersistence persistence;
     final CompletableFuture<PersistenceStatistics> result;
-    final FoundationDBStatistics statistics;
 
+    final FoundationDBStatistics statistics;
     final AtomicReference<Flow.Subscription> subscriptionRef = new AtomicReference<>();
     final AtomicReference<Transaction> transactionRef = new AtomicReference<>();
     final AtomicReference<DirectorySubspace> primaryRef = new AtomicReference<>();
     final Map<Tuple, DirectorySubspace> indexByTuple = new ConcurrentHashMap<>();
-    final CopyOnWriteArraySet<Range> clearedRanges = new CopyOnWriteArraySet<>();
 
+    final CopyOnWriteArraySet<Range> clearedRanges = new CopyOnWriteArraySet<>();
     final CharsetEncoder encoder = StandardCharsets.UTF_8.newEncoder();
     final AtomicReference<Fragment> previousFragmentRef = new AtomicReference<>();
+
+    final Map<Fragment, OnNextElement> onNextMapQueue = Collections.synchronizedMap(new LinkedHashMap<>());
+    final AtomicBoolean onCompleteFlag = new AtomicBoolean(false);
 
     public CreateOrOverwriteSubscriber(FoundationDBPersistence persistence, CompletableFuture<PersistenceStatistics> result, FoundationDBStatistics statistics) {
         this.persistence = persistence;
@@ -54,6 +87,17 @@ public class CreateOrOverwriteSubscriber implements Flow.Subscriber<Fragment> {
     @Override
     public void onNext(Fragment fragment) {
         try {
+            {
+                // enqueue onNext fragment and ensure that it's our turn
+                OnNextElement element = onNextMapQueue.computeIfAbsent(fragment, f -> new OnNextElement(f));
+                OnNextElement head = peekOnNextMapQueue();
+                if (!head.equals(element)) {
+                    head.future.thenAccept(f -> onNext(fragment));
+                    System.out.println("Not our turn!");
+                    return; // not our turn to process, defer
+                }
+            }
+
             DirectorySubspace primary = primaryRef.get();
             if (primary == null) {
                 persistence.getPrimary(fragment.namespace(), fragment.entity()).thenAccept(p -> {
@@ -131,14 +175,34 @@ public class CreateOrOverwriteSubscriber implements Flow.Subscriber<Fragment> {
                     statistics.setKeyValue(PATH_VALUE_INDEX);
                 }
 
-                subscriptionRef.get().request(1);
-
             } finally {
                 previousFragmentRef.set(fragment);
-
             }
+
+            {
+                // remove from queue and check whether stream is complete
+                onNextMapQueue.remove(fragment);
+                OnNextElement head = peekOnNextMapQueue();
+                if (head != null && head.fragment == ON_COMPLETE) {
+                    doOnComplete();
+                    return;
+                }
+            }
+
+            subscriptionRef.get().request(1);
+
         } catch (Throwable t) {
             result.completeExceptionally(t);
+        }
+    }
+
+    OnNextElement peekOnNextMapQueue() {
+        synchronized (onNextMapQueue) {
+            Iterator<OnNextElement> iterator = onNextMapQueue.values().iterator();
+            if (iterator.hasNext()) {
+                return iterator.next();
+            }
+            return null;
         }
     }
 
@@ -149,11 +213,19 @@ public class CreateOrOverwriteSubscriber implements Flow.Subscriber<Fragment> {
 
     @Override
     public void onComplete() {
-        try {
-            transactionRef.get().commit();
-            result.complete(statistics);
-        } catch (Throwable t) {
-            result.completeExceptionally(t);
+        onNextMapQueue.computeIfAbsent(ON_COMPLETE, f -> new OnNextElement(f));
+        OnNextElement head = peekOnNextMapQueue();
+        if (head.fragment == ON_COMPLETE) {
+            doOnComplete();
+        }
+    }
+
+    void doOnComplete() {
+        if (onCompleteFlag.compareAndSet(false, true)) {
+            transactionRef.get().commit().thenAccept(v -> result.complete(statistics)).exceptionally(e -> {
+                result.completeExceptionally(e);
+                return null;
+            });
         }
     }
 }
