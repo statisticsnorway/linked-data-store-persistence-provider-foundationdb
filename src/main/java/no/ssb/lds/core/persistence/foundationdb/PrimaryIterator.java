@@ -47,7 +47,11 @@ class PrimaryIterator implements Consumer<Boolean> {
         this.entity = entity;
         this.primary = primary;
         this.iterator = iterator;
-        this.remainingIds = new TreeSet<>(ids);
+        if (ids == null) {
+            this.remainingIds = null;
+        } else {
+            this.remainingIds = new TreeSet<>(ids);
+        }
         this.limit = limit;
         subscription.registerCancel(v -> cancel.set(true));
         subscription.registerRequest(n -> applyBackpressure(n));
@@ -123,7 +127,7 @@ class PrimaryIterator implements Consumer<Boolean> {
             fragmentsVersion = null;
         }
 
-        if (snapshot != null && snapshot.compareTo(version) >= 0) {
+        if (snapshot != null && snapshot.compareTo(version) > 0) {
             // ignore versions newer than snapshot
             iterator.onHasNext().thenAccept(this);
             return;
@@ -140,25 +144,35 @@ class PrimaryIterator implements Consumer<Boolean> {
             return;
         }
 
-        if (subscription.budget.getAndDecrement() <= 0) {
-            // budget stolen, will be returned when more back-pressure is applied.
-            fragmentToPublish = new Fragment(namespace, entity, dbId, toTimestamp(version), path, offset, kv.getValue());
+        if (fragmentsPublished >= limit) {
+            // reached limit and there are more matching fragments.
+            subscription.onNext(new PersistenceResult(Fragment.DONE, statistics, true));
+            signalComplete();
             return;
         }
 
-        // publish fragment
-        subscription.onNext(new PersistenceResult(new Fragment(namespace, entity, dbId, toTimestamp(version), path, offset, kv.getValue()), statistics));
-        fragmentsPublished++;
+        fragmentToPublish = new Fragment(namespace, entity, dbId, toTimestamp(version), path, offset, kv.getValue());
+
+        if (subscription.budget.getAndDecrement() <= 0) {
+            // budget stolen, will be returned when more back-pressure is applied.
+            return;
+        }
+
+        publishFragment();
 
         iterator.onHasNext().thenAccept(this);
     }
 
-    void returnStolenBudget() {
+    private void publishFragment() {
         if (fragmentToPublish != null) {
-            subscription.onNext(new PersistenceResult(fragmentToPublish, statistics));
+            subscription.onNext(new PersistenceResult(fragmentToPublish, statistics, false));
             fragmentToPublish = null;
             fragmentsPublished++;
         }
+    }
+
+    void returnStolenBudget() {
+        publishFragment();
     }
 
     void onAsyncIteratorHasNoMore() {
@@ -167,6 +181,7 @@ class PrimaryIterator implements Consumer<Boolean> {
     }
 
     void signalComplete() {
+        subscription.onComplete();
         doneSignal.complete(fragmentsPublished);
     }
 }

@@ -40,7 +40,7 @@ public class FoundationDBSubscription implements Flow.Subscription {
     @Override
     public void request(long n) {
         try {
-            if (budget.getAndAdd(n) >= 0) {
+            if (budget.getAndAdd(n) > 0) {
                 // back-pressure arrived before budget was exhausted
                 return;
             }

@@ -65,25 +65,25 @@ class ReadPublisher implements Flow.Publisher<PersistenceResult> {
 
             if (aMatchingKeyValue == null) {
                 // document not found
-                subscriber.onNext(new PersistenceResult(Fragment.DONE, statistics));
+                subscriber.onNext(new PersistenceResult(Fragment.DONE, statistics, false));
                 subscriber.onComplete();
             }
             if (!primary.contains(aMatchingKeyValue.getKey())) {
-                subscriber.onNext(new PersistenceResult(Fragment.DONE, statistics));
+                subscriber.onNext(new PersistenceResult(Fragment.DONE, statistics, false));
                 subscriber.onComplete();
             }
             Tuple key = primary.unpack(aMatchingKeyValue.getKey());
             Tuple version = key.getNestedTuple(1);
             String path = key.getString(2);
             if (DELETED_MARKER.equals(path)) {
-                subscriber.onNext(new PersistenceResult(new Fragment(namespace, entity, id, toTimestamp(version), DELETED_MARKER, 0, EMPTY_BYTE_ARRAY), statistics));
+                subscriber.onNext(new PersistenceResult(new Fragment(namespace, entity, id, toTimestamp(version), DELETED_MARKER, 0, EMPTY_BYTE_ARRAY), statistics, false));
                 subscriber.onComplete();
             }
 
             /*
              * Get document with given version.
              */
-            publishDocuments(subscription, snapshot, subscription.transactionRef.get(), statistics, primary, namespace, entity, id, version, 1);
+            publishDocuments(subscription, snapshot, subscription.transactionRef.get(), statistics, primary, namespace, entity, id, version, Integer.MAX_VALUE);
         });
     }
 

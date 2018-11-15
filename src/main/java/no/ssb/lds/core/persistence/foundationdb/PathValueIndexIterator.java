@@ -6,9 +6,9 @@ import com.apple.foundationdb.async.AsyncIterable;
 import com.apple.foundationdb.async.AsyncIterator;
 import com.apple.foundationdb.directory.DirectorySubspace;
 import com.apple.foundationdb.tuple.Tuple;
-import no.ssb.lds.api.persistence.buffered.Document;
 import no.ssb.lds.api.persistence.Fragment;
 import no.ssb.lds.api.persistence.PersistenceResult;
+import no.ssb.lds.api.persistence.buffered.Document;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -182,7 +182,7 @@ class PathValueIndexIterator implements Consumer<Boolean> {
     private void signalComplete() {
         if (fragmentsPublished == 0) {
             // no elements in iterator
-            subscription.onNext(new PersistenceResult(Fragment.DONE, statistics));
+            subscription.onNext(new PersistenceResult(Fragment.DONE, statistics, false));
         }
         subscription.onComplete();
     }

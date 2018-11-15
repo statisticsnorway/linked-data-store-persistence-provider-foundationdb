@@ -66,11 +66,11 @@ class ReadVersionsPublisher implements Flow.Publisher<PersistenceResult> {
 
             if (aMatchingKeyValue == null) {
                 // document not found
-                subscriber.onNext(new PersistenceResult(Fragment.DONE, statistics));
+                subscriber.onNext(new PersistenceResult(Fragment.DONE, statistics, false));
                 subscriber.onComplete();
             }
             if (!primary.contains(aMatchingKeyValue.getKey())) {
-                subscriber.onNext(new PersistenceResult(Fragment.DONE, statistics));
+                subscriber.onNext(new PersistenceResult(Fragment.DONE, statistics, false));
                 subscriber.onComplete();
             }
             Tuple key = primary.unpack(aMatchingKeyValue.getKey());
