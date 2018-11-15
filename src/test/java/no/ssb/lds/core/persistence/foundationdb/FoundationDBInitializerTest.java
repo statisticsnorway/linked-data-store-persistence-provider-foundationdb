@@ -1,11 +1,11 @@
 package no.ssb.lds.core.persistence.foundationdb;
 
+import no.ssb.lds.api.persistence.PersistenceDeletePolicy;
 import no.ssb.lds.api.persistence.buffered.BufferedPersistence;
 import no.ssb.lds.api.persistence.buffered.Document;
 import no.ssb.lds.api.persistence.buffered.DocumentKey;
 import no.ssb.lds.api.persistence.buffered.DocumentLeafNode;
 import no.ssb.lds.api.persistence.buffered.DocumentResult;
-import no.ssb.lds.api.persistence.PersistenceDeletePolicy;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.testng.annotations.AfterClass;
@@ -280,7 +280,7 @@ public class FoundationDBInitializerTest {
             } else if (untypedValue instanceof JSONArray) {
             } else if (untypedValue instanceof String) {
                 String value = (String) untypedValue;
-                leafNodeByPath.put(path, new DocumentLeafNode(key, path, value));
+                leafNodeByPath.put(path, new DocumentLeafNode(key, path, value, 8 * 1024));
             } else if (untypedValue instanceof Number) {
             } else if (untypedValue instanceof Boolean) {
             }
