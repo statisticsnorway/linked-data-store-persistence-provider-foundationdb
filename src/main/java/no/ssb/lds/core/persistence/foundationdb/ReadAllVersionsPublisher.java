@@ -4,28 +4,28 @@ import com.apple.foundationdb.KeyValue;
 import com.apple.foundationdb.async.AsyncIterator;
 import com.apple.foundationdb.directory.DirectorySubspace;
 import com.apple.foundationdb.tuple.Tuple;
-import no.ssb.lds.api.persistence.PersistenceResult;
+import no.ssb.lds.api.persistence.Fragment;
 
 import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.PRIMARY_INDEX;
 
-class ReadAllVersionsPublisher implements Flow.Publisher<PersistenceResult> {
+class ReadAllVersionsPublisher implements Flow.Publisher<Fragment> {
 
     final FoundationDBPersistence persistence;
-    final FoundationDBStatistics statistics;
+    final FoundationDBTransaction transaction;
     final String namespace;
     final String entity;
     final String id;
     final int limit;
 
-    final AtomicReference<Flow.Subscriber<? super PersistenceResult>> subscriberRef = new AtomicReference<>();
+    final AtomicReference<Flow.Subscriber<? super Fragment>> subscriberRef = new AtomicReference<>();
     final AtomicReference<DirectorySubspace> primaryRef = new AtomicReference<>();
 
-    ReadAllVersionsPublisher(FoundationDBPersistence persistence, FoundationDBStatistics statistics, String namespace, String entity, String id, int limit) {
+    ReadAllVersionsPublisher(FoundationDBPersistence persistence, FoundationDBTransaction transaction, String namespace, String entity, String id, int limit) {
         this.persistence = persistence;
-        this.statistics = statistics;
+        this.transaction = transaction;
         this.namespace = namespace;
         this.entity = entity;
         this.id = id;
@@ -33,7 +33,7 @@ class ReadAllVersionsPublisher implements Flow.Publisher<PersistenceResult> {
     }
 
     @Override
-    public void subscribe(Flow.Subscriber<? super PersistenceResult> subscriber) {
+    public void subscribe(Flow.Subscriber<? super Fragment> subscriber) {
         subscriberRef.set(subscriber);
         FoundationDBSubscription subscription = new FoundationDBSubscription(persistence.db, subscriber);
         subscription.registerFirstRequest(n -> doReadVersions(subscription, n));
@@ -53,9 +53,8 @@ class ReadAllVersionsPublisher implements Flow.Publisher<PersistenceResult> {
         /*
          * Get all fragments of all versions.
          */
-        AsyncIterator<KeyValue> iterator = subscription.transactionRef.get().getRange(primary.range(Tuple.from(id))).iterator();
-        statistics.getRange(PRIMARY_INDEX);
-        PrimaryIterator primaryIterator = new PrimaryIterator(subscription, null, statistics, namespace, entity, null, primary, iterator, limit);
+        AsyncIterator<KeyValue> iterator = transaction.getRange(primary.range(Tuple.from(id)), PRIMARY_INDEX).iterator();
+        PrimaryIterator primaryIterator = new PrimaryIterator(subscription, null, transaction, namespace, entity, null, primary, iterator, limit);
         iterator.onHasNext().thenAccept(primaryIterator);
         primaryIterator.doneSignal
                 .thenAccept(fragmentsPublished -> {

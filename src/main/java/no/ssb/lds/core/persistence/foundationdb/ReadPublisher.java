@@ -1,13 +1,11 @@
 package no.ssb.lds.core.persistence.foundationdb;
 
 import com.apple.foundationdb.KeyValue;
-import com.apple.foundationdb.ReadTransaction;
 import com.apple.foundationdb.async.AsyncIterable;
 import com.apple.foundationdb.async.AsyncIterator;
 import com.apple.foundationdb.directory.DirectorySubspace;
 import com.apple.foundationdb.tuple.Tuple;
 import no.ssb.lds.api.persistence.Fragment;
-import no.ssb.lds.api.persistence.PersistenceResult;
 
 import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicReference;
@@ -18,21 +16,21 @@ import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.P
 import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.findAnyOneMatchingFragmentInPrimary;
 import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.toTimestamp;
 
-class ReadPublisher implements Flow.Publisher<PersistenceResult> {
+class ReadPublisher implements Flow.Publisher<Fragment> {
 
     final FoundationDBPersistence persistence;
-    final FoundationDBStatistics statistics;
+    final FoundationDBTransaction transaction;
     final Tuple snapshot;
     final String namespace;
     final String entity;
     final String id;
 
-    final AtomicReference<Flow.Subscriber<? super PersistenceResult>> subscriberRef = new AtomicReference<>();
+    final AtomicReference<Flow.Subscriber<? super Fragment>> subscriberRef = new AtomicReference<>();
     final AtomicReference<DirectorySubspace> primaryRef = new AtomicReference<>();
 
-    ReadPublisher(FoundationDBPersistence persistence, FoundationDBStatistics statistics, Tuple snapshot, String namespace, String entity, String id) {
+    ReadPublisher(FoundationDBPersistence persistence, FoundationDBTransaction transaction, Tuple snapshot, String namespace, String entity, String id) {
         this.persistence = persistence;
-        this.statistics = statistics;
+        this.transaction = transaction;
         this.snapshot = snapshot;
         this.namespace = namespace;
         this.entity = entity;
@@ -40,7 +38,7 @@ class ReadPublisher implements Flow.Publisher<PersistenceResult> {
     }
 
     @Override
-    public void subscribe(Flow.Subscriber<? super PersistenceResult> subscriber) {
+    public void subscribe(Flow.Subscriber<? super Fragment> subscriber) {
         subscriberRef.set(subscriber);
         FoundationDBSubscription subscription = new FoundationDBSubscription(persistence.db, subscriber);
         subscription.registerFirstRequest(n -> doRead(subscription, n));
@@ -60,38 +58,37 @@ class ReadPublisher implements Flow.Publisher<PersistenceResult> {
         /*
          * Determine the correct version timestamp of the document to use. Will perform a database access and fetch at most one key-value
          */
-        findAnyOneMatchingFragmentInPrimary(statistics, subscription.transactionRef.get(), primary, id, snapshot).thenAccept(aMatchingKeyValue -> {
-            Flow.Subscriber<? super PersistenceResult> subscriber = subscriberRef.get();
+        findAnyOneMatchingFragmentInPrimary(transaction, primary, id, snapshot).thenAccept(aMatchingKeyValue -> {
+            Flow.Subscriber<? super Fragment> subscriber = subscriberRef.get();
 
             if (aMatchingKeyValue == null) {
                 // document not found
-                subscriber.onNext(new PersistenceResult(Fragment.DONE, statistics, false));
+                subscriber.onNext(Fragment.DONE_NOT_LIMITED);
                 subscriber.onComplete();
             }
             if (!primary.contains(aMatchingKeyValue.getKey())) {
-                subscriber.onNext(new PersistenceResult(Fragment.DONE, statistics, false));
+                subscriber.onNext(Fragment.DONE_NOT_LIMITED);
                 subscriber.onComplete();
             }
             Tuple key = primary.unpack(aMatchingKeyValue.getKey());
             Tuple version = key.getNestedTuple(1);
             String path = key.getString(2);
             if (DELETED_MARKER.equals(path)) {
-                subscriber.onNext(new PersistenceResult(new Fragment(namespace, entity, id, toTimestamp(version), DELETED_MARKER, 0, EMPTY_BYTE_ARRAY), statistics, false));
+                subscriber.onNext(new Fragment(namespace, entity, id, toTimestamp(version), DELETED_MARKER, 0, EMPTY_BYTE_ARRAY));
                 subscriber.onComplete();
             }
 
             /*
              * Get document with given version.
              */
-            publishDocuments(subscription, snapshot, subscription.transactionRef.get(), statistics, primary, namespace, entity, id, version, Integer.MAX_VALUE);
+            publishDocuments(subscription, snapshot, transaction, primary, namespace, entity, id, version, Integer.MAX_VALUE);
         });
     }
 
-    static void publishDocuments(FoundationDBSubscription subscription, Tuple snapshot, ReadTransaction transaction, FoundationDBStatistics statistics, DirectorySubspace primary, String namespace, String entity, String id, Tuple version, int limit) {
-        AsyncIterable<KeyValue> range = transaction.getRange(primary.range(Tuple.from(id, version)));
-        statistics.getRange(PRIMARY_INDEX);
+    static void publishDocuments(FoundationDBSubscription subscription, Tuple snapshot, FoundationDBTransaction transaction, DirectorySubspace primary, String namespace, String entity, String id, Tuple version, int limit) {
+        AsyncIterable<KeyValue> range = transaction.getRange(primary.range(Tuple.from(id, version)), PRIMARY_INDEX);
         AsyncIterator<KeyValue> iterator = range.iterator();
-        PrimaryIterator primaryIterator = new PrimaryIterator(subscription, snapshot, statistics, namespace, entity, null, primary, iterator, limit);
+        PrimaryIterator primaryIterator = new PrimaryIterator(subscription, snapshot, transaction, namespace, entity, null, primary, iterator, limit);
         iterator.onHasNext().thenAccept(primaryIterator);
         primaryIterator.doneSignal
                 .thenAccept(fragmentsPublished -> {

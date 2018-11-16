@@ -1,8 +1,8 @@
 package no.ssb.lds.core.persistence.foundationdb;
 
-import no.ssb.lds.api.persistence.PersistenceStatistics;
+import no.ssb.lds.api.persistence.TransactionStatistics;
 
-class FoundationDBStatistics extends PersistenceStatistics {
+class FoundationDBStatistics extends TransactionStatistics {
 
     public FoundationDBStatistics clearRange(String index) {
         add(index + " clear range", 1);

@@ -1,11 +1,9 @@
 package no.ssb.lds.core.persistence.foundationdb;
 
 import com.apple.foundationdb.Range;
-import com.apple.foundationdb.Transaction;
 import com.apple.foundationdb.directory.DirectorySubspace;
 import com.apple.foundationdb.tuple.Tuple;
 import no.ssb.lds.api.persistence.Fragment;
-import no.ssb.lds.api.persistence.PersistenceStatistics;
 
 import java.nio.charset.CharsetEncoder;
 import java.nio.charset.StandardCharsets;
@@ -19,7 +17,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.Flow;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.EMPTY_BYTE_ARRAY;
@@ -56,11 +53,10 @@ public class CreateOrOverwriteSubscriber implements Flow.Subscriber<Fragment> {
     }
 
     final FoundationDBPersistence persistence;
-    final CompletableFuture<PersistenceStatistics> result;
+    final CompletableFuture<Void> result;
 
-    final FoundationDBStatistics statistics;
     final AtomicReference<Flow.Subscription> subscriptionRef = new AtomicReference<>();
-    final AtomicReference<Transaction> transactionRef = new AtomicReference<>();
+    final FoundationDBTransaction transaction;
     final AtomicReference<DirectorySubspace> primaryRef = new AtomicReference<>();
     final Map<Tuple, DirectorySubspace> indexByTuple = new ConcurrentHashMap<>();
 
@@ -69,18 +65,16 @@ public class CreateOrOverwriteSubscriber implements Flow.Subscriber<Fragment> {
     final AtomicReference<Fragment> previousFragmentRef = new AtomicReference<>();
 
     final Map<Fragment, OnNextElement> onNextMapQueue = Collections.synchronizedMap(new LinkedHashMap<>());
-    final AtomicBoolean onCompleteFlag = new AtomicBoolean(false);
 
-    public CreateOrOverwriteSubscriber(FoundationDBPersistence persistence, CompletableFuture<PersistenceStatistics> result, FoundationDBStatistics statistics) {
+    public CreateOrOverwriteSubscriber(FoundationDBPersistence persistence, CompletableFuture<Void> result, FoundationDBTransaction transaction) {
         this.persistence = persistence;
         this.result = result;
-        this.statistics = statistics;
+        this.transaction = transaction;
     }
 
     @Override
     public void onSubscribe(Flow.Subscription subscription) {
         this.subscriptionRef.set(subscription);
-        transactionRef.set(persistence.db.createTransaction());
         subscription.request(1);
     }
 
@@ -89,7 +83,7 @@ public class CreateOrOverwriteSubscriber implements Flow.Subscriber<Fragment> {
         try {
             {
                 // enqueue onNext fragment and ensure that it's our turn
-                OnNextElement element = onNextMapQueue.computeIfAbsent(fragment, f -> new OnNextElement(f));
+                OnNextElement element = onNextMapQueue.computeIfAbsent(fragment, OnNextElement::new);
                 OnNextElement head = peekOnNextMapQueue();
                 if (!head.equals(element)) {
                     head.future.thenAccept(f -> onNext(fragment));
@@ -128,8 +122,7 @@ public class CreateOrOverwriteSubscriber implements Flow.Subscriber<Fragment> {
                 Range range = primary.range(Tuple.from(fragment.id(), fragmentVersion));
                 if (!clearedRanges.contains(range)) {
                     clearedRanges.add(range);
-                    transactionRef.get().clear(range);
-                    statistics.clearRange(PRIMARY_INDEX);
+                    transaction.clearRange(range, PRIMARY_INDEX);
                 }
 
                 // NOTE: With current implementation we do not need to clear the index. False-positive matches in the index
@@ -154,8 +147,7 @@ public class CreateOrOverwriteSubscriber implements Flow.Subscriber<Fragment> {
                 );
                 byte[] binaryPrimaryKey = primary.pack(primaryKey);
 
-                transactionRef.get().set(binaryPrimaryKey, fragment.value());
-                statistics.setKeyValue(PRIMARY_INDEX);
+                transaction.set(binaryPrimaryKey, fragment.value(), PRIMARY_INDEX);
 
                 if (fragment.offset() == 0) {
                     /*
@@ -171,8 +163,7 @@ public class CreateOrOverwriteSubscriber implements Flow.Subscriber<Fragment> {
                     if (binaryValueIndexKey.length > MAX_DESIRED_KEY_LENGTH) {
                         throw new IllegalArgumentException("Document fragment key is too big for index, at most " + MAX_DESIRED_KEY_LENGTH + " bytes allowed. Was: " + binaryValueIndexKey.length + " bytes.");
                     }
-                    transactionRef.get().set(binaryValueIndexKey, EMPTY_BYTE_ARRAY);
-                    statistics.setKeyValue(PATH_VALUE_INDEX);
+                    transaction.set(binaryValueIndexKey, EMPTY_BYTE_ARRAY, PATH_VALUE_INDEX);
                 }
 
             } finally {
@@ -213,7 +204,7 @@ public class CreateOrOverwriteSubscriber implements Flow.Subscriber<Fragment> {
 
     @Override
     public void onComplete() {
-        onNextMapQueue.computeIfAbsent(ON_COMPLETE, f -> new OnNextElement(f));
+        onNextMapQueue.computeIfAbsent(ON_COMPLETE, OnNextElement::new);
         OnNextElement head = peekOnNextMapQueue();
         if (head.fragment == ON_COMPLETE) {
             doOnComplete();
@@ -221,11 +212,6 @@ public class CreateOrOverwriteSubscriber implements Flow.Subscriber<Fragment> {
     }
 
     void doOnComplete() {
-        if (onCompleteFlag.compareAndSet(false, true)) {
-            transactionRef.get().commit().thenAccept(v -> result.complete(statistics)).exceptionally(e -> {
-                result.completeExceptionally(e);
-                return null;
-            });
-        }
+        result.complete(null);
     }
 }

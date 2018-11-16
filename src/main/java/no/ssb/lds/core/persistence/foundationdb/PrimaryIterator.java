@@ -5,7 +5,6 @@ import com.apple.foundationdb.async.AsyncIterator;
 import com.apple.foundationdb.directory.DirectorySubspace;
 import com.apple.foundationdb.tuple.Tuple;
 import no.ssb.lds.api.persistence.Fragment;
-import no.ssb.lds.api.persistence.PersistenceResult;
 
 import java.util.Collections;
 import java.util.NavigableSet;
@@ -18,14 +17,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
-import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.PRIMARY_INDEX;
 import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.toTimestamp;
 
 class PrimaryIterator implements Consumer<Boolean> {
 
     final FoundationDBSubscription subscription;
     final Tuple snapshot;
-    final FoundationDBStatistics statistics;
+    final FoundationDBTransaction transaction;
     final String namespace;
     final String entity;
     final DirectorySubspace primary;
@@ -46,10 +44,10 @@ class PrimaryIterator implements Consumer<Boolean> {
     // signalled with number of fragments published by this iterator
     final CompletableFuture<Integer> doneSignal = new CompletableFuture<>();
 
-    PrimaryIterator(FoundationDBSubscription subscription, Tuple snapshot, FoundationDBStatistics statistics, String namespace, String entity, NavigableSet<String> ids, DirectorySubspace primary, AsyncIterator<KeyValue> iterator, int limit) {
+    PrimaryIterator(FoundationDBSubscription subscription, Tuple snapshot, FoundationDBTransaction transaction, String namespace, String entity, NavigableSet<String> ids, DirectorySubspace primary, AsyncIterator<KeyValue> iterator, int limit) {
         this.subscription = subscription;
         this.snapshot = snapshot;
-        this.statistics = statistics;
+        this.transaction = transaction;
         this.namespace = namespace;
         this.entity = entity;
         this.primary = primary;
@@ -68,7 +66,6 @@ class PrimaryIterator implements Consumer<Boolean> {
     private void checkAndRecordProcessingThread() {
         String name = Thread.currentThread().getName();
         if (!processingThreads.contains(name)) {
-            System.out.format("Processing thread: %s%n", name);
             processingThreads.add(name);
         }
     }
@@ -96,7 +93,6 @@ class PrimaryIterator implements Consumer<Boolean> {
 
     void onAsyncIteratorHasNext() {
         KeyValue kv = iterator.next();
-        statistics.rangeIteratorNext(PRIMARY_INDEX);
 
         returnStolenBudget();
 
@@ -163,7 +159,7 @@ class PrimaryIterator implements Consumer<Boolean> {
 
         if (fragmentsPublished.get() >= limit) {
             // reached limit and there are more matching fragments.
-            subscription.onNext(new PersistenceResult(Fragment.DONE, statistics, true));
+            subscription.onNext(Fragment.DONE_NOT_LIMITED);
             signalComplete();
             return;
         }
@@ -185,7 +181,7 @@ class PrimaryIterator implements Consumer<Boolean> {
     private void publishFragment() {
         Fragment fragment = fragmentToPublish.getAndSet(null);
         if (fragment != null) {
-            subscription.onNext(new PersistenceResult(fragment, statistics, false));
+            subscription.onNext(fragment);
             fragmentsPublished.incrementAndGet();
         }
     }

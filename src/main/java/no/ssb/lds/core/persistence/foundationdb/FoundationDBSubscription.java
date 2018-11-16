@@ -2,7 +2,7 @@ package no.ssb.lds.core.persistence.foundationdb;
 
 import com.apple.foundationdb.Database;
 import com.apple.foundationdb.Transaction;
-import no.ssb.lds.api.persistence.PersistenceResult;
+import no.ssb.lds.api.persistence.Fragment;
 
 import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -15,12 +15,12 @@ public class FoundationDBSubscription implements Flow.Subscription {
     final AtomicLong budget = new AtomicLong(0);
     final AtomicBoolean first = new AtomicBoolean(true);
     final AtomicReference<Transaction> transactionRef = new AtomicReference<>();
-    final Flow.Subscriber<? super PersistenceResult> subscriber;
+    final Flow.Subscriber<? super Fragment> subscriber;
     final AtomicReference<Consumer<Long>> firstRequestCallback = new AtomicReference<>();
     final AtomicReference<Consumer<Long>> requestCallback = new AtomicReference<>();
     final AtomicReference<Consumer<Void>> cancelCallback = new AtomicReference<>();
 
-    FoundationDBSubscription(Database db, Flow.Subscriber<? super PersistenceResult> subscriber) {
+    FoundationDBSubscription(Database db, Flow.Subscriber<? super Fragment> subscriber) {
         this.db = db;
         this.subscriber = subscriber;
     }
@@ -78,8 +78,8 @@ public class FoundationDBSubscription implements Flow.Subscription {
         }
     }
 
-    void onNext(PersistenceResult persistenceResult) {
-        subscriber.onNext(persistenceResult);
+    void onNext(Fragment fragment) {
+        subscriber.onNext(fragment);
     }
 
     public void onComplete() {

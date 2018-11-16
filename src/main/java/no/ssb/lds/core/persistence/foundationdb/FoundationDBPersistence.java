@@ -4,9 +4,7 @@ import com.apple.foundationdb.Database;
 import com.apple.foundationdb.KeySelector;
 import com.apple.foundationdb.KeyValue;
 import com.apple.foundationdb.Range;
-import com.apple.foundationdb.ReadTransaction;
 import com.apple.foundationdb.StreamingMode;
-import com.apple.foundationdb.Transaction;
 import com.apple.foundationdb.async.AsyncIterable;
 import com.apple.foundationdb.async.AsyncIterator;
 import com.apple.foundationdb.directory.Directory;
@@ -16,8 +14,7 @@ import no.ssb.lds.api.persistence.Fragment;
 import no.ssb.lds.api.persistence.Persistence;
 import no.ssb.lds.api.persistence.PersistenceDeletePolicy;
 import no.ssb.lds.api.persistence.PersistenceException;
-import no.ssb.lds.api.persistence.PersistenceResult;
-import no.ssb.lds.api.persistence.PersistenceStatistics;
+import no.ssb.lds.api.persistence.Transaction;
 
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
@@ -81,16 +78,20 @@ public class FoundationDBPersistence implements Persistence {
         return directorySubspaceByPaths.computeIfAbsent(key, k -> directory.createOrOpen(db, List.of(k.toString())));
     }
 
+    public Transaction createTransaction() throws PersistenceException {
+        return new FoundationDBTransaction(db.createTransaction());
+    }
+
     @Override
-    public CompletableFuture<PersistenceStatistics> createOrOverwrite(Flow.Publisher<Fragment> publisher) throws PersistenceException {
-        CompletableFuture<PersistenceStatistics> result = new CompletableFuture<>();
-        publisher.subscribe(new CreateOrOverwriteSubscriber(this, result, new FoundationDBStatistics()));
+    public CompletableFuture<Void> createOrOverwrite(Transaction transaction, Flow.Publisher<Fragment> publisher) throws PersistenceException {
+        CompletableFuture<Void> result = new CompletableFuture<>();
+        publisher.subscribe(new CreateOrOverwriteSubscriber(this, result, (FoundationDBTransaction) transaction));
         return result;
     }
 
     @Override
-    public Flow.Publisher<PersistenceResult> read(ZonedDateTime snapshot, String namespace, String entity, String id) throws PersistenceException {
-        return new ReadPublisher(this, new FoundationDBStatistics(), toTuple(snapshot), namespace, entity, id);
+    public Flow.Publisher<Fragment> read(Transaction transaction, ZonedDateTime snapshot, String namespace, String entity, String id) throws PersistenceException {
+        return new ReadPublisher(this, (FoundationDBTransaction) transaction, toTuple(snapshot), namespace, entity, id);
     }
 
     /**
@@ -102,13 +103,13 @@ public class FoundationDBPersistence implements Persistence {
      * @param snapshot
      * @return a completable-future that will return null if document is not found.
      */
-    static CompletableFuture<KeyValue> findAnyOneMatchingFragmentInPrimary(FoundationDBStatistics statistics, ReadTransaction transaction, DirectorySubspace primary, String id, Tuple snapshot) {
+    static CompletableFuture<KeyValue> findAnyOneMatchingFragmentInPrimary(FoundationDBTransaction transaction, DirectorySubspace primary, String id, Tuple snapshot) {
         /*
          * The range specified is guaranteed to never return more than 1 result. The returned KeyValue list will be one of:
          *   (1) Last fragment of matching resource when resource exists and client-timestamp is greater than or equal to resource timestamp
          *   (2) Last fragment of an unrelated resource when resource does not exist for the specified timestamp
          *   (3) KeyValue of another key-space than PRIMARYDBSubscription subscription, Tuple snapshot, ReadTransaction transaction, FoundationDBStatistics statistics, String namespace, String entity, String id, Tuple version, int limit) {
-        CompletableFuture<PersistenceResult> result =
+        CompletableFuture<FragmentResult> result =
          *   (4) Empty when database is empty (or an unlikely corner-case when asking for a resource at beginning of key-space)
          */
 
@@ -116,13 +117,11 @@ public class FoundationDBPersistence implements Persistence {
                 KeySelector.firstGreaterOrEqual(primary.pack(Tuple.from(id, snapshot))),
                 KeySelector.firstGreaterOrEqual(primary.pack(Tuple.from(id + " "))),
                 1,
-                false,
-                StreamingMode.EXACT
+                StreamingMode.EXACT,
+                PRIMARY_INDEX
         );
 
-        statistics.getRange(PRIMARY_INDEX);
         return version.asList().thenApply(keyValues -> {
-            statistics.rangeAsList(PRIMARY_INDEX);
             if (keyValues.isEmpty()) {
                 // (4) Empty
                 return null;
@@ -145,39 +144,37 @@ public class FoundationDBPersistence implements Persistence {
     }
 
     @Override
-    public Flow.Publisher<PersistenceResult> readVersions(ZonedDateTime snapshotFrom, ZonedDateTime snapshotTo, String namespace, String entity, String id, int limit) throws PersistenceException {
-        return new ReadVersionsPublisher(this, new FoundationDBStatistics(), toTuple(snapshotFrom), toTuple(snapshotTo), namespace, entity, id, limit);
+    public Flow.Publisher<Fragment> readVersions(Transaction transaction, ZonedDateTime snapshotFrom, ZonedDateTime snapshotTo, String namespace, String entity, String id, String firstId, int limit) throws PersistenceException {
+        return new ReadVersionsPublisher(this, (FoundationDBTransaction) transaction, toTuple(snapshotFrom), toTuple(snapshotTo), namespace, entity, id, limit);
     }
 
     @Override
-    public Flow.Publisher<PersistenceResult> readAllVersions(String namespace, String entity, String id, int limit) throws PersistenceException {
-        return new ReadAllVersionsPublisher(this, new FoundationDBStatistics(), namespace, entity, id, limit);
+    public Flow.Publisher<Fragment> readAllVersions(Transaction transaction, String namespace, String entity, String id, ZonedDateTime firstVersion, int limit) throws PersistenceException {
+        return new ReadAllVersionsPublisher(this, (FoundationDBTransaction) transaction, namespace, entity, id, limit);
     }
 
     @Override
-    public CompletableFuture<PersistenceStatistics> delete(ZonedDateTime timestamp, String namespace, String entity, String id, PersistenceDeletePolicy policy) throws PersistenceException {
-        return db.runAsync(transaction -> doDelete(transaction, new FoundationDBStatistics(), toTuple(timestamp), namespace, entity, id, policy));
+    public CompletableFuture<Void> delete(Transaction transaction, String namespace, String entity, String id, ZonedDateTime version, PersistenceDeletePolicy policy) throws PersistenceException {
+        return doDelete((FoundationDBTransaction) transaction, namespace, entity, id, toTuple(version), policy);
     }
 
-    private CompletableFuture<PersistenceStatistics> doDelete(Transaction transaction, FoundationDBStatistics statistics, Tuple timestamp, String namespace, String entity, String id, PersistenceDeletePolicy policy) {
-        CompletableFuture<PersistenceStatistics> result = new CompletableFuture<>();
+    private CompletableFuture<Void> doDelete(FoundationDBTransaction transaction, String namespace, String entity, String id, Tuple version, PersistenceDeletePolicy policy) {
+        CompletableFuture<Void> result = new CompletableFuture<>();
 
         getPrimary(namespace, entity).thenAccept(primary -> {
 
             /*
              * Get all fragments of given versioned resource.
              */
-            Range range = primary.range(Tuple.from(id, timestamp));
-            AsyncIterator<KeyValue> iterator = transaction.getRange(range).iterator();
-            statistics.getRange(PRIMARY_INDEX);
+            Range range = primary.range(Tuple.from(id, version));
+            AsyncIterator<KeyValue> iterator = transaction.getRange(range, PRIMARY_INDEX).iterator();
 
-            CompletableFuture<PersistenceStatistics> fragmentsDeletedSignal = new CompletableFuture<>();
-            iterator.onHasNext().thenAccept(doDeleteAllIndexFragments(fragmentsDeletedSignal, transaction, statistics, namespace, entity, primary, iterator));
+            CompletableFuture<Void> fragmentsDeletedSignal = new CompletableFuture<>();
+            iterator.onHasNext().thenAccept(doDeleteAllIndexFragments(fragmentsDeletedSignal, transaction, namespace, entity, primary, iterator));
 
             fragmentsDeletedSignal.thenAccept(v -> {
-                transaction.clear(range);
-                statistics.clearRange(PRIMARY_INDEX);
-                result.complete(statistics);
+                transaction.clearRange(range, PRIMARY_INDEX);
+                result.complete(null);
             });
         });
 
@@ -185,12 +182,12 @@ public class FoundationDBPersistence implements Persistence {
     }
 
     @Override
-    public CompletableFuture<PersistenceStatistics> deleteAllVersions(String namespace, String entity, String id, PersistenceDeletePolicy policy) throws PersistenceException {
-        return db.runAsync(transaction -> doDeleteAllVersions(transaction, new FoundationDBStatistics(), namespace, entity, id, policy));
+    public CompletableFuture<Void> deleteAllVersions(Transaction transaction, String namespace, String entity, String id, PersistenceDeletePolicy policy) throws PersistenceException {
+        return doDeleteAllVersions((FoundationDBTransaction) transaction, namespace, entity, id, policy);
     }
 
-    private CompletableFuture<PersistenceStatistics> doDeleteAllVersions(Transaction transaction, FoundationDBStatistics statistics, String namespace, String entity, String id, PersistenceDeletePolicy policy) {
-        CompletableFuture<PersistenceStatistics> result = new CompletableFuture<>();
+    private CompletableFuture<Void> doDeleteAllVersions(FoundationDBTransaction transaction, String namespace, String entity, String id, PersistenceDeletePolicy policy) {
+        CompletableFuture<Void> result = new CompletableFuture<>();
 
         getPrimary(namespace, entity).thenAccept(primary -> {
 
@@ -198,27 +195,25 @@ public class FoundationDBPersistence implements Persistence {
              * Get all fragments of all versions of resource.
              */
             Range range = primary.range(Tuple.from(id));
-            AsyncIterator<KeyValue> iterator = transaction.getRange(range).iterator();
-            statistics.getRange(PRIMARY_INDEX);
+            AsyncIterator<KeyValue> iterator = transaction.getRange(range, PRIMARY_INDEX).iterator();
 
-            CompletableFuture<PersistenceStatistics> fragmentsDeletedSignal = new CompletableFuture<>();
-            iterator.onHasNext().thenAccept(doDeleteAllIndexFragments(fragmentsDeletedSignal, transaction, statistics, namespace, entity, primary, iterator));
+            CompletableFuture<Void> fragmentsDeletedSignal = new CompletableFuture<>();
+            iterator.onHasNext().thenAccept(doDeleteAllIndexFragments(fragmentsDeletedSignal, transaction, namespace, entity, primary, iterator));
 
             fragmentsDeletedSignal.thenAccept(v -> {
-                transaction.clear(range);
-                statistics.clearRange(PRIMARY_INDEX);
-                result.complete(statistics);
+                transaction.clearRange(range, PRIMARY_INDEX);
+                result.complete(null);
             });
         });
 
         return result;
     }
 
-    private Consumer<Boolean> doDeleteAllIndexFragments(CompletableFuture<PersistenceStatistics> fragmentsDeletedSignal, Transaction transaction, FoundationDBStatistics statistics, String namespace, String entity, DirectorySubspace primary, AsyncIterator<KeyValue> iterator) {
+    private Consumer<Boolean> doDeleteAllIndexFragments(CompletableFuture<Void> fragmentsDeletedSignal, FoundationDBTransaction transaction, String namespace, String entity, DirectorySubspace primary, AsyncIterator<KeyValue> iterator) {
         return hasNext -> {
             try {
                 if (!hasNext) {
-                    fragmentsDeletedSignal.complete(statistics);
+                    fragmentsDeletedSignal.complete(null);
                     return;
                 }
 
@@ -230,7 +225,7 @@ public class FoundationDBPersistence implements Persistence {
                 long offset = key.getLong(3);
 
                 if (offset > 0) {
-                    iterator.onHasNext().thenAccept(doDeleteAllIndexFragments(fragmentsDeletedSignal, transaction, statistics, namespace, entity, primary, iterator));
+                    iterator.onHasNext().thenAccept(doDeleteAllIndexFragments(fragmentsDeletedSignal, transaction, namespace, entity, primary, iterator));
                     return;
                 }
 
@@ -247,9 +242,8 @@ public class FoundationDBPersistence implements Persistence {
                 );
                 getIndex(namespace, entity, indexUnawarePath).thenAccept(index -> {
                     byte[] binaryValueIndexKey = index.pack(valueIndexKey);
-                    transaction.clear(binaryValueIndexKey);
-                    statistics.clearKeyValue(PATH_VALUE_INDEX);
-                    iterator.onHasNext().thenAccept(doDeleteAllIndexFragments(fragmentsDeletedSignal, transaction, statistics, namespace, entity, primary, iterator));
+                    transaction.clear(binaryValueIndexKey, PATH_VALUE_INDEX);
+                    iterator.onHasNext().thenAccept(doDeleteAllIndexFragments(fragmentsDeletedSignal, transaction, namespace, entity, primary, iterator));
                 });
             } catch (Throwable t) {
                 fragmentsDeletedSignal.completeExceptionally(t);
@@ -259,42 +253,40 @@ public class FoundationDBPersistence implements Persistence {
 
 
     @Override
-    public CompletableFuture<PersistenceStatistics> markDeleted(ZonedDateTime timestamp, String namespace, String entity, String id, PersistenceDeletePolicy policy) throws PersistenceException {
-        return db.runAsync(transaction -> doMarkDeleted(transaction, new FoundationDBStatistics(), toTuple(timestamp), namespace, entity, id, policy));
+    public CompletableFuture<Void> markDeleted(Transaction transaction, String namespace, String entity, String id, ZonedDateTime version, PersistenceDeletePolicy policy) throws PersistenceException {
+        return doMarkDeleted((FoundationDBTransaction) transaction, toTuple(version), namespace, entity, id, policy);
     }
 
-    CompletableFuture<PersistenceStatistics> doMarkDeleted(Transaction transaction, FoundationDBStatistics statistics, Tuple timestamp, String namespace, String entity, String id, PersistenceDeletePolicy policy) {
+    CompletableFuture<Void> doMarkDeleted(FoundationDBTransaction transaction, Tuple version, String namespace, String entity, String id, PersistenceDeletePolicy policy) {
         return getPrimary(namespace, entity).thenCompose(primary -> {
 
             // Clear primary of existing document with same version
-            transaction.clear(primary.range(Tuple.from(id, timestamp)));
-            statistics.clearRange(PRIMARY_INDEX);
+            transaction.clearRange(primary.range(Tuple.from(id, version)), PRIMARY_INDEX);
 
             /*
              * PRIMARY
              */
             Tuple primaryKey = Tuple.from(
                     id,
-                    timestamp,
+                    version,
                     DELETED_MARKER,
                     0
             );
             byte[] binaryPrimaryKey = primary.pack(primaryKey);
-            transaction.set(binaryPrimaryKey, EMPTY_BYTE_ARRAY);
-            statistics.setKeyValue(PRIMARY_INDEX);
+            transaction.set(binaryPrimaryKey, EMPTY_BYTE_ARRAY, PRIMARY_INDEX);
 
-            return CompletableFuture.completedFuture(statistics);
+            return CompletableFuture.completedFuture(null);
         });
     }
 
     @Override
-    public Flow.Publisher<PersistenceResult> findAll(ZonedDateTime snapshot, String namespace, String entity, int limit) throws PersistenceException {
-        return new FindAllPublisher(this, new FoundationDBStatistics(), toTuple(snapshot), namespace, entity, limit);
+    public Flow.Publisher<Fragment> findAll(Transaction transaction, ZonedDateTime snapshot, String namespace, String entity, String firstId, int limit) throws PersistenceException {
+        return new FindAllPublisher(this, (FoundationDBTransaction) transaction, toTuple(snapshot), namespace, entity, limit);
     }
 
     @Override
-    public Flow.Publisher<PersistenceResult> find(ZonedDateTime snapshot, String namespace, String entity, String path, String value, int limit) throws PersistenceException {
-        return new FindPublisher(this, new FoundationDBStatistics(), toTuple(snapshot), namespace, entity, path, value, limit);
+    public Flow.Publisher<Fragment> find(Transaction transaction, ZonedDateTime snapshot, String namespace, String entity, String path, String value, String firstId, int limit) throws PersistenceException {
+        return new FindPublisher(this, (FoundationDBTransaction) transaction, toTuple(snapshot), namespace, entity, path, value, limit);
     }
 
     @Override
