@@ -250,14 +250,10 @@ public class FoundationDBInitializerTest {
 
             System.out.println("Finding funky long address by city");
             int findSize = size(persistence.find(transaction, now, namespace, "FunkyLongAddress", "city", bigString, null, 100).join());
-            if (findSize != 1) {
-                throw new IllegalStateException("Test failed! " + findSize);
-            }
+            assertEquals(findSize, 1);
             System.out.println("Finding funky long address by city (with non-matching value)");
             int findExpectNoMatchSize = size(persistence.find(transaction, now, namespace, "FunkyLongAddress", "city", bigString + "1", null, 100).join());
-            if (findExpectNoMatchSize != 0) {
-                throw new IllegalStateException("Test failed! " + findExpectNoMatchSize);
-            }
+            assertEquals(findExpectNoMatchSize, 0);
             System.out.println("Deleting funky long address");
             persistence.delete(transaction, namespace, "FunkyLongAddress", "newyork", oct18, PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
         }
