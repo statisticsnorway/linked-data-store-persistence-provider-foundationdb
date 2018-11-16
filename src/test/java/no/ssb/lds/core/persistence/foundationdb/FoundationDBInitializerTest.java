@@ -92,7 +92,7 @@ public class FoundationDBInitializerTest {
 
     @Test
     public void thatBasicTimeBasedVersioningWorks() {
-        persistence.deleteAllVersions(namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
+        //persistence.deleteAllVersions(namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
 
         ZonedDateTime jan1624 = ZonedDateTime.of(1624, 1, 1, 12, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
         ZonedDateTime jan1626 = ZonedDateTime.of(1626, 1, 1, 12, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
@@ -104,9 +104,9 @@ public class FoundationDBInitializerTest {
         Document input2 = toDocument(namespace, "Address", "newyork", createAddress("New York", "NY", "USA"), jan1664);
         persistence.createOrOverwrite(input2).join();
         Iterator<Document> iterator = persistence.readAllVersions(namespace, "Address", "newyork", 100).join();
-        assertEquals(iterator.next(), input0);
-        assertEquals(iterator.next(), input1);
         assertEquals(iterator.next(), input2);
+        assertEquals(iterator.next(), input1);
+        assertEquals(iterator.next(), input0);
         assertFalse(iterator.hasNext());
     }
 
