@@ -144,15 +144,6 @@ public class FoundationDBPersistence implements Persistence {
         });
     }
 
-    void getDocument(FoundationDBSubscription subscription, Tuple snapshot, ReadTransaction transaction, FoundationDBStatistics statistics, String namespace, String entity, String id, Tuple version, int limit) {
-        getPrimary(namespace, entity).thenAccept(primary -> {
-            AsyncIterable<KeyValue> range = transaction.getRange(primary.range(Tuple.from(id, version)));
-            statistics.getRange(PRIMARY_INDEX);
-            AsyncIterator<KeyValue> iterator = range.iterator();
-            iterator.onHasNext().thenAccept(new PrimaryIterator(subscription, snapshot, statistics, namespace, entity, null, primary, iterator, limit));
-        });
-    }
-
     @Override
     public Flow.Publisher<PersistenceResult> readVersions(ZonedDateTime snapshotFrom, ZonedDateTime snapshotTo, String namespace, String entity, String id, int limit) throws PersistenceException {
         return new ReadVersionsPublisher(this, new FoundationDBStatistics(), toTuple(snapshotFrom), toTuple(snapshotTo), namespace, entity, id, limit);

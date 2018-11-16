@@ -7,10 +7,15 @@ import com.apple.foundationdb.tuple.Tuple;
 import no.ssb.lds.api.persistence.Fragment;
 import no.ssb.lds.api.persistence.PersistenceResult;
 
+import java.util.Collections;
 import java.util.NavigableSet;
+import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.PRIMARY_INDEX;
@@ -30,11 +35,13 @@ class PrimaryIterator implements Consumer<Boolean> {
 
     final AtomicBoolean cancel = new AtomicBoolean(false);
 
-    Fragment fragmentToPublish;
-    int fragmentsPublished = 0;
+    final Set<String> processingThreads = new ConcurrentSkipListSet<>();
 
-    String fragmentsId;
-    Tuple fragmentsVersion;
+    final AtomicReference<Fragment> fragmentToPublish = new AtomicReference<>();
+    final AtomicInteger fragmentsPublished = new AtomicInteger(0);
+
+    final AtomicReference<String> fragmentsId = new AtomicReference<>();
+    final AtomicReference<Tuple> fragmentsVersion = new AtomicReference<>();
 
     // signalled with number of fragments published by this iterator
     final CompletableFuture<Integer> doneSignal = new CompletableFuture<>();
@@ -50,11 +57,20 @@ class PrimaryIterator implements Consumer<Boolean> {
         if (ids == null) {
             this.remainingIds = null;
         } else {
-            this.remainingIds = new TreeSet<>(ids);
+            this.remainingIds = Collections.synchronizedNavigableSet(new TreeSet<>(ids));
         }
         this.limit = limit;
         subscription.registerCancel(v -> cancel.set(true));
         subscription.registerRequest(n -> applyBackpressure(n));
+        checkAndRecordProcessingThread();
+    }
+
+    private void checkAndRecordProcessingThread() {
+        String name = Thread.currentThread().getName();
+        if (!processingThreads.contains(name)) {
+            System.out.format("Processing thread: %s%n", name);
+            processingThreads.add(name);
+        }
     }
 
     void applyBackpressure(long n) {
@@ -65,6 +81,8 @@ class PrimaryIterator implements Consumer<Boolean> {
     @Override
     public void accept(Boolean hasNext) {
         try {
+            // System.out.format("%s :: %s :: accept(%s)%n", Thread.currentThread().getName(), this.toString(), hasNext);
+            checkAndRecordProcessingThread();
             if (hasNext) {
                 onAsyncIteratorHasNext();
             } else {
@@ -72,11 +90,14 @@ class PrimaryIterator implements Consumer<Boolean> {
             }
         } catch (Throwable t) {
             iterator.cancel();
-            subscription.onError(t);
+            doneSignal.completeExceptionally(t);
         }
     }
 
     void onAsyncIteratorHasNext() {
+        KeyValue kv = iterator.next();
+        statistics.rangeIteratorNext(PRIMARY_INDEX);
+
         returnStolenBudget();
 
         if (cancel.get()) {
@@ -85,9 +106,6 @@ class PrimaryIterator implements Consumer<Boolean> {
             signalComplete();
             return;
         }
-
-        KeyValue kv = iterator.next();
-        statistics.rangeIteratorNext(PRIMARY_INDEX);
 
         Tuple keyTuple = primary.unpack(kv.getKey());
         String dbId = keyTuple.getString(0);
@@ -115,43 +133,44 @@ class PrimaryIterator implements Consumer<Boolean> {
             }
         }
 
-        if (fragmentsId == null) {
-            fragmentsId = dbId;
+        if (fragmentsId.get() == null) {
+            this.fragmentsId.set(dbId);
         }
 
-        if (!dbId.equals(fragmentsId)) {
+        if (!dbId.equals(fragmentsId.get())) {
             if (remainingIds != null) {
-                remainingIds.remove(fragmentsId);
+                remainingIds.remove(fragmentsId.get());
             }
-            fragmentsId = dbId;
-            fragmentsVersion = null;
+            fragmentsId.set(dbId);
+            fragmentsVersion.set(null);
         }
 
-        if (snapshot != null && snapshot.compareTo(version) > 0) {
-            // ignore versions newer than snapshot
-            iterator.onHasNext().thenAccept(this);
-            return;
+        if (snapshot != null) {
+            if (snapshot.compareTo(version) > 0) {
+                // ignore versions newer than snapshot
+                iterator.onHasNext().thenAccept(this);
+                return;
+            }
+
+            if (!fragmentsVersion.compareAndSet(null, version)) {
+                if (!version.equals(fragmentsVersion.get())) {
+                    // already matched a more recent version closer to snapshot
+                    iterator.onHasNext().thenAccept(this);
+                    return;
+                }
+            }
         }
 
-        if (fragmentsVersion == null) {
-            // first fragment matching correct version of resource
-            fragmentsVersion = version;
-        }
-
-        if (!version.equals(fragmentsVersion)) {
-            // already matched a more recent version closer to snapshot
-            iterator.onHasNext().thenAccept(this);
-            return;
-        }
-
-        if (fragmentsPublished >= limit) {
+        if (fragmentsPublished.get() >= limit) {
             // reached limit and there are more matching fragments.
             subscription.onNext(new PersistenceResult(Fragment.DONE, statistics, true));
             signalComplete();
             return;
         }
 
-        fragmentToPublish = new Fragment(namespace, entity, dbId, toTimestamp(version), path, offset, kv.getValue());
+        if (!fragmentToPublish.compareAndSet(null, new Fragment(namespace, entity, dbId, toTimestamp(version), path, offset, kv.getValue()))) {
+            throw new IllegalStateException("Previous fragment was not published!");
+        }
 
         if (subscription.budget.getAndDecrement() <= 0) {
             // budget stolen, will be returned when more back-pressure is applied.
@@ -164,10 +183,10 @@ class PrimaryIterator implements Consumer<Boolean> {
     }
 
     private void publishFragment() {
-        if (fragmentToPublish != null) {
-            subscription.onNext(new PersistenceResult(fragmentToPublish, statistics, false));
-            fragmentToPublish = null;
-            fragmentsPublished++;
+        Fragment fragment = fragmentToPublish.getAndSet(null);
+        if (fragment != null) {
+            subscription.onNext(new PersistenceResult(fragment, statistics, false));
+            fragmentsPublished.incrementAndGet();
         }
     }
 
@@ -181,7 +200,6 @@ class PrimaryIterator implements Consumer<Boolean> {
     }
 
     void signalComplete() {
-        subscription.onComplete();
-        doneSignal.complete(fragmentsPublished);
+        doneSignal.complete(fragmentsPublished.get());
     }
 }

@@ -91,6 +91,15 @@ class ReadPublisher implements Flow.Publisher<PersistenceResult> {
         AsyncIterable<KeyValue> range = transaction.getRange(primary.range(Tuple.from(id, version)));
         statistics.getRange(PRIMARY_INDEX);
         AsyncIterator<KeyValue> iterator = range.iterator();
-        iterator.onHasNext().thenAccept(new PrimaryIterator(subscription, snapshot, statistics, namespace, entity, null, primary, iterator, limit));
+        PrimaryIterator primaryIterator = new PrimaryIterator(subscription, snapshot, statistics, namespace, entity, null, primary, iterator, limit);
+        iterator.onHasNext().thenAccept(primaryIterator);
+        primaryIterator.doneSignal
+                .thenAccept(fragmentsPublished -> {
+                    subscription.onComplete();
+                })
+                .exceptionally(t -> {
+                    subscription.onError(t);
+                    return null;
+                });
     }
 }

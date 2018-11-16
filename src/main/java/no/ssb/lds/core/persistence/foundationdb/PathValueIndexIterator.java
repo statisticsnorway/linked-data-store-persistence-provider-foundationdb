@@ -118,7 +118,7 @@ class PathValueIndexIterator implements Consumer<Boolean> {
             for (Tuple version : versions.descendingSet()) {
                 if (version.compareTo(snapshot) <= 0) {
                     indexMatches.incrementAndGet();
-                    onIndexMatch(id, version).thenAccept(v -> {
+                    onIndexMatch(id, version).thenAccept(fragmentsPublished -> {
                         versions.clear();
                         versionsId.set(dbId);
                         versions.add(matchedVersion);
@@ -134,7 +134,7 @@ class PathValueIndexIterator implements Consumer<Boolean> {
         rangeIterator.onHasNext().thenAccept(this);
     }
 
-    CompletableFuture<Void> onIndexMatch(String id, Tuple version) {
+    CompletableFuture<Integer> onIndexMatch(String id, Tuple version) {
         return persistence.findAnyOneMatchingFragmentInPrimary(statistics, transaction, primary, id, snapshot).thenCompose(aMatchingFragmentKv -> {
             Tuple keyTuple = primary.unpack(aMatchingFragmentKv.getKey());
             Tuple versionTuple = keyTuple.getNestedTuple(1);
@@ -162,7 +162,7 @@ class PathValueIndexIterator implements Consumer<Boolean> {
             AsyncIterator<KeyValue> iterator = range.iterator();
             PrimaryIterator primaryIterator = new PrimaryIterator(subscription, snapshot, statistics, namespace, entity, null, primary, iterator, limit);
             iterator.onHasNext().thenAccept(primaryIterator);
-            return primaryIterator.doneSignal.thenApply(count -> (Void) null);
+            return primaryIterator.doneSignal;
         });
     }
 

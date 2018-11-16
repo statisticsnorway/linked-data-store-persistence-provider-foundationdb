@@ -80,8 +80,8 @@ public class CreateOrOverwriteSubscriber implements Flow.Subscriber<Fragment> {
     @Override
     public void onSubscribe(Flow.Subscription subscription) {
         this.subscriptionRef.set(subscription);
-        subscription.request(1);
         transactionRef.set(persistence.db.createTransaction());
+        subscription.request(1);
     }
 
     @Override
