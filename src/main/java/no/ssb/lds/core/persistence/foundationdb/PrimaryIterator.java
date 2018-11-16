@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
+import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.EMPTY_BYTE_ARRAY;
 import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.toTimestamp;
 
 class PrimaryIterator implements Consumer<Boolean> {
@@ -67,6 +68,7 @@ class PrimaryIterator implements Consumer<Boolean> {
         String name = Thread.currentThread().getName();
         if (!processingThreads.contains(name)) {
             processingThreads.add(name);
+            System.out.format("%s :: %s :: accept()%n", Thread.currentThread().getName(), this.toString());
         }
     }
 
@@ -78,7 +80,6 @@ class PrimaryIterator implements Consumer<Boolean> {
     @Override
     public void accept(Boolean hasNext) {
         try {
-            // System.out.format("%s :: %s :: accept(%s)%n", Thread.currentThread().getName(), this.toString(), hasNext);
             checkAndRecordProcessingThread();
             if (hasNext) {
                 onAsyncIteratorHasNext();
@@ -159,7 +160,7 @@ class PrimaryIterator implements Consumer<Boolean> {
 
         if (fragmentsPublished.get() >= limit) {
             // reached limit and there are more matching fragments.
-            subscription.onNext(Fragment.DONE_NOT_LIMITED);
+            subscription.onNext(new Fragment(true, Fragment.LIMITED_CODE, namespace, entity, dbId, toTimestamp(version), path, offset, EMPTY_BYTE_ARRAY));
             signalComplete();
             return;
         }
