@@ -1,7 +1,6 @@
 package no.ssb.lds.core.persistence.foundationdb;
 
 import com.apple.foundationdb.Database;
-import com.apple.foundationdb.Transaction;
 import no.ssb.lds.api.persistence.Fragment;
 
 import java.util.concurrent.Flow;
@@ -14,7 +13,6 @@ public class FoundationDBSubscription implements Flow.Subscription {
     final Database db;
     final AtomicLong budget = new AtomicLong(0);
     final AtomicBoolean first = new AtomicBoolean(true);
-    final AtomicReference<Transaction> transactionRef = new AtomicReference<>();
     final Flow.Subscriber<? super Fragment> subscriber;
     final AtomicReference<Consumer<Long>> firstRequestCallback = new AtomicReference<>();
     final AtomicReference<Consumer<Long>> requestCallback = new AtomicReference<>();
@@ -45,7 +43,6 @@ public class FoundationDBSubscription implements Flow.Subscription {
                 return;
             }
             if (first.compareAndSet(true, false)) {
-                transactionRef.set(db.createTransaction());
                 firstRequestCallback.get().accept(n);
             }
             if (requestCallback.get() != null) {
@@ -58,24 +55,13 @@ public class FoundationDBSubscription implements Flow.Subscription {
 
     @Override
     public void cancel() {
-        try {
-            if (cancelCallback.get() != null) {
-                cancelCallback.get().accept(null);
-            }
-        } finally {
-            if (transactionRef.get() != null) {
-                transactionRef.get().cancel();
-            }
+        if (cancelCallback.get() != null) {
+            cancelCallback.get().accept(null);
         }
     }
 
     void onError(Throwable t) {
-        try {
-            transactionRef.get().cancel();
-            transactionRef.get().close();
-        } finally {
-            subscriber.onError(t);
-        }
+        subscriber.onError(t);
     }
 
     void onNext(Fragment fragment) {
