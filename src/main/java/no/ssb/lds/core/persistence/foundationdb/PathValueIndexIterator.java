@@ -39,7 +39,7 @@ class PathValueIndexIterator implements Consumer<Boolean> {
 
     final AtomicBoolean cancel = new AtomicBoolean(false);
 
-    int fragmentsPublished = 0;
+    final AtomicInteger fragmentsPublished = new AtomicInteger(0);
 
     PathValueIndexIterator(FoundationDBSubscription subscription, FoundationDBPersistence persistence, Tuple snapshot, FoundationDBTransaction transaction, AsyncIterator<KeyValue> rangeIterator, DirectorySubspace primary, DirectorySubspace index, NavigableSet<Tuple> versions, String namespace, String entity, String path, String value, int limit) {
         this.subscription = subscription;
@@ -101,10 +101,11 @@ class PathValueIndexIterator implements Consumer<Boolean> {
         final String id = versionsId.get();
         if (id != null && !dbId.equals(id)) {
             // other resource
-            for (Tuple version : versions.descendingSet()) {
-                if (version.compareTo(snapshot) <= 0) {
+            for (Tuple version : versions) {
+                if (version.compareTo(snapshot) >= 0) {
                     indexMatches.incrementAndGet();
                     onIndexMatch(id, version).thenAccept(fragmentsPublished -> {
+                        this.fragmentsPublished.addAndGet(fragmentsPublished);
                         versions.clear();
                         versionsId.set(dbId);
                         versions.add(matchedVersion);
@@ -140,8 +141,8 @@ class PathValueIndexIterator implements Consumer<Boolean> {
                 return CompletableFuture.completedFuture(null);
             }
 
-            // TODO detect false-positive due to either index-value-truncation or value occupying multiple key-value slots
-            // TODO This requires buffering all key-value slots of given fragment and must be done outside the persistence-provider layer
+            // NOTE It's possible to get false-positive due to either index-value-truncation or value occupying
+            // multiple key-value slots. These must be discarded by client or the buffered persistence layer.
 
             AsyncIterable<KeyValue> range = transaction.getRange(primary.range(Tuple.from(id, version)), PRIMARY_INDEX);
             AsyncIterator<KeyValue> iterator = range.iterator();
@@ -152,8 +153,8 @@ class PathValueIndexIterator implements Consumer<Boolean> {
     }
 
     void onHasNoMore() {
-        for (Tuple version : versions.descendingSet()) {
-            if (version.compareTo(snapshot) <= 0) {
+        for (Tuple version : versions) {
+            if (version.compareTo(snapshot) >= 0) {
                 indexMatches.incrementAndGet();
                 onIndexMatch(versionsId.get(), version).thenAccept(v -> {
                     signalComplete();
@@ -165,7 +166,7 @@ class PathValueIndexIterator implements Consumer<Boolean> {
     }
 
     private void signalComplete() {
-        if (fragmentsPublished == 0) {
+        if (fragmentsPublished.get() == 0) {
             // no elements in iterator
             subscription.onNext(Fragment.DONE_NOT_LIMITED);
         }
