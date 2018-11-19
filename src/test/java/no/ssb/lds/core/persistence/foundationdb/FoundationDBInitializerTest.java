@@ -58,9 +58,8 @@ public class FoundationDBInitializerTest {
             persistence.createOrOverwrite(transaction, input1).join();
             Document input2 = toDocument(namespace, "Address", "newyork", createAddress("New York", "NY", "USA"), jan1664);
             persistence.createOrOverwrite(transaction, input2).join();
-            //List<Document> outputAfterCreate = persistence.readAllVersions(namespace, "Address", "newyork", 100).join().getMatches();
-
-            //assertTrue(outputAfterCreate.size() > 0);
+            Iterator<Document> iteratorWithDocuments = persistence.readAllVersions(transaction, namespace, "Address", "newyork", null, 100).join();
+            assertEquals(size(iteratorWithDocuments), 3);
 
             persistence.deleteAllVersions(transaction, namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
 
@@ -82,7 +81,7 @@ public class FoundationDBInitializerTest {
     @Test
     public void thatBasicCreateThenReadWorks() {
         try (Transaction transaction = persistence.createTransaction()) {
-            //persistence.deleteAllVersions(namespace, "Person", "john", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
+            persistence.deleteAllVersions(transaction, namespace, "Person", "john", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
 
             ZonedDateTime oct18 = ZonedDateTime.of(2018, 10, 7, 19, 49, 26, (int) TimeUnit.MILLISECONDS.toNanos(307), ZoneId.of("Etc/UTC"));
             Document input = toDocument(namespace, "Person", "john", createPerson("John", "Smith"), oct18);
@@ -97,7 +96,7 @@ public class FoundationDBInitializerTest {
     @Test
     public void thatBasicTimeBasedVersioningWorks() {
         try (Transaction transaction = persistence.createTransaction()) {
-            //persistence.deleteAllVersions(namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
+            persistence.deleteAllVersions(transaction, namespace, "Address", "newyork", PersistenceDeletePolicy.FAIL_IF_INCOMING_LINKS).join();
 
             ZonedDateTime jan1624 = ZonedDateTime.of(1624, 1, 1, 12, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));
             ZonedDateTime jan1626 = ZonedDateTime.of(1626, 1, 1, 12, 0, 0, (int) TimeUnit.MILLISECONDS.toNanos(0), ZoneId.of("Etc/UTC"));

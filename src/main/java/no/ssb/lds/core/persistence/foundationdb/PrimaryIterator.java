@@ -60,7 +60,7 @@ class PrimaryIterator implements Consumer<Boolean> {
         }
         this.limit = limit;
         subscription.registerCancel(v -> cancel.set(true));
-        subscription.registerRequest(n -> applyBackpressure(n));
+        subscription.registerOnBudgetPositive(n -> applyBackpressure(n));
         checkAndRecordProcessingThread();
     }
 

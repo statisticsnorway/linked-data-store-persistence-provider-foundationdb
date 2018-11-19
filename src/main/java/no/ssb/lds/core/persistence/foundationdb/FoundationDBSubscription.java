@@ -15,7 +15,7 @@ public class FoundationDBSubscription implements Flow.Subscription {
     final AtomicBoolean first = new AtomicBoolean(true);
     final Flow.Subscriber<? super Fragment> subscriber;
     final AtomicReference<Consumer<Long>> firstRequestCallback = new AtomicReference<>();
-    final AtomicReference<Consumer<Long>> requestCallback = new AtomicReference<>();
+    final AtomicReference<Consumer<Long>> requestOnBudgetPositiveCallback = new AtomicReference<>();
     final AtomicReference<Consumer<Void>> cancelCallback = new AtomicReference<>();
 
     FoundationDBSubscription(Database db, Flow.Subscriber<? super Fragment> subscriber) {
@@ -23,16 +23,19 @@ public class FoundationDBSubscription implements Flow.Subscription {
         this.subscriber = subscriber;
     }
 
-    void registerFirstRequest(Consumer<Long> callback) {
+    FoundationDBSubscription registerFirstRequest(Consumer<Long> callback) {
         firstRequestCallback.set(callback);
+        return this;
     }
 
-    void registerRequest(Consumer<Long> callback) {
-        requestCallback.set(callback);
+    FoundationDBSubscription registerOnBudgetPositive(Consumer<Long> callback) {
+        requestOnBudgetPositiveCallback.set(callback);
+        return this;
     }
 
-    void registerCancel(Consumer<Void> callback) {
+    FoundationDBSubscription registerCancel(Consumer<Void> callback) {
         cancelCallback.set(callback);
+        return this;
     }
 
     @Override
@@ -42,11 +45,15 @@ public class FoundationDBSubscription implements Flow.Subscription {
                 // back-pressure arrived before budget was exhausted
                 return;
             }
+            // budget was exhausted before back-pressure arrived
             if (first.compareAndSet(true, false)) {
+                // first request
                 firstRequestCallback.get().accept(n);
-            }
-            if (requestCallback.get() != null) {
-                requestCallback.get().accept(n);
+            } else {
+                // not-first requests
+                if (requestOnBudgetPositiveCallback.get() != null) {
+                    requestOnBudgetPositiveCallback.get().accept(n);
+                }
             }
         } catch (Throwable t) {
             subscriber.onError(t);
