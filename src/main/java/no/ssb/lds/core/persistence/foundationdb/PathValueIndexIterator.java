@@ -1,35 +1,29 @@
 package no.ssb.lds.core.persistence.foundationdb;
 
 import com.apple.foundationdb.KeyValue;
-import com.apple.foundationdb.ReadTransaction;
-import com.apple.foundationdb.Transaction;
+import com.apple.foundationdb.async.AsyncIterable;
 import com.apple.foundationdb.async.AsyncIterator;
 import com.apple.foundationdb.directory.DirectorySubspace;
 import com.apple.foundationdb.tuple.Tuple;
-import no.ssb.lds.api.persistence.Document;
-import no.ssb.lds.api.persistence.PersistenceResult;
+import no.ssb.lds.api.persistence.Fragment;
 
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
 import java.util.NavigableSet;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
-import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.DELETED_MARKER;
-import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.PATH_VALUE_INDEX;
-import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.toTimestamp;
+import static no.ssb.lds.api.persistence.Fragment.DELETED_MARKER;
+import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.PRIMARY_INDEX;
 
 class PathValueIndexIterator implements Consumer<Boolean> {
-    final FoundationDBPersistence persistence;
 
+    final FoundationDBSubscription subscription;
+    final FoundationDBPersistence persistence;
     final Tuple snapshot;
-    final ReadTransaction transaction;
-    final CompletableFuture<PersistenceResult> result;
-    final FoundationDBStatistics statistics;
+    final FoundationDBTransaction transaction;
     final AsyncIterator<KeyValue> rangeIterator;
     final DirectorySubspace primary;
     final DirectorySubspace index;
@@ -40,18 +34,18 @@ class PathValueIndexIterator implements Consumer<Boolean> {
     final String value;
     final int limit;
 
-    final List<Document> documents = Collections.synchronizedList(new ArrayList<>());
-    final List<CompletableFuture<Document>> primaryLookupFutures = Collections.synchronizedList(new ArrayList<>());
-
     final AtomicInteger indexMatches = new AtomicInteger(0);
     final AtomicReference<String> versionsId = new AtomicReference<>();
 
-    PathValueIndexIterator(FoundationDBPersistence persistence, Tuple snapshot, ReadTransaction transaction, CompletableFuture<PersistenceResult> result, FoundationDBStatistics statistics, AsyncIterator<KeyValue> rangeIterator, DirectorySubspace primary, DirectorySubspace index, NavigableSet<Tuple> versions, String namespace, String entity, String path, String value, int limit) {
+    final AtomicBoolean cancel = new AtomicBoolean(false);
+
+    final AtomicInteger fragmentsPublished = new AtomicInteger(0);
+
+    PathValueIndexIterator(FoundationDBSubscription subscription, FoundationDBPersistence persistence, Tuple snapshot, FoundationDBTransaction transaction, AsyncIterator<KeyValue> rangeIterator, DirectorySubspace primary, DirectorySubspace index, NavigableSet<Tuple> versions, String namespace, String entity, String path, String value, int limit) {
+        this.subscription = subscription;
         this.persistence = persistence;
-        this.transaction = transaction;
         this.snapshot = snapshot;
-        this.result = result;
-        this.statistics = statistics;
+        this.transaction = transaction;
         this.rangeIterator = rangeIterator;
         this.primary = primary;
         this.index = index;
@@ -61,6 +55,7 @@ class PathValueIndexIterator implements Consumer<Boolean> {
         this.path = path;
         this.value = value;
         this.limit = limit;
+        subscription.registerCancel(v -> cancel.set(true));
     }
 
     @Override
@@ -72,18 +67,24 @@ class PathValueIndexIterator implements Consumer<Boolean> {
                 onHasNoMore();
             }
         } catch (Throwable t) {
-            result.completeExceptionally(t);
+            rangeIterator.cancel();
+            subscription.onError(t);
         }
     }
 
     void onHasNext() {
+        if (cancel.get()) {
+            // honor external cancel signal
+            rangeIterator.cancel();
+            subscription.onComplete();
+            return;
+        }
+
         KeyValue kv = rangeIterator.next();
-        statistics.rangeIteratorNext(PATH_VALUE_INDEX);
 
         if (indexMatches.get() >= limit) {
             rangeIterator.cancel();
-            statistics.rangeIteratorCancel(PATH_VALUE_INDEX);
-            result.complete(PersistenceResult.readResult(List.copyOf(documents), true, statistics));
+            subscription.onComplete();
             return;
         }
 
@@ -94,78 +95,81 @@ class PathValueIndexIterator implements Consumer<Boolean> {
         }
 
         Tuple key = index.unpack(kv.getKey());
-        final String dbId = key.getString(1);
+        String dbId = key.getString(1);
+        Tuple matchedVersion = key.getNestedTuple(2);
 
         final String id = versionsId.get();
         if (id != null && !dbId.equals(id)) {
             // other resource
-            for (Tuple version : versions.descendingSet()) {
-                if (version.compareTo(snapshot) <= 0) {
+            for (Tuple version : versions) {
+                if (version.compareTo(snapshot) >= 0) {
                     indexMatches.incrementAndGet();
-                    primaryLookupFutures.add(onIndexMatch(id, version));
-                    break;
+                    onIndexMatch(id, version).thenAccept(fragmentsPublished -> {
+                        this.fragmentsPublished.addAndGet(fragmentsPublished);
+                        versions.clear();
+                        versionsId.set(dbId);
+                        versions.add(matchedVersion);
+                        rangeIterator.onHasNext().thenAccept(this);
+                    });
+                    return;
                 }
             }
             versions.clear();
         }
         versionsId.set(dbId);
-
-        Tuple matchedVersion = key.getNestedTuple(2);
         versions.add(matchedVersion);
-
         rangeIterator.onHasNext().thenAccept(this);
     }
 
-    CompletableFuture<Document> onIndexMatch(String id, Tuple version) {
-        return persistence.findAnyOneMatchingFragmentInPrimary(statistics, transaction, primary, id, snapshot).thenCompose(aMatchingFragmentKv -> {
+    CompletableFuture<Integer> onIndexMatch(String id, Tuple version) {
+        return persistence.findAnyOneMatchingFragmentInPrimary(transaction, primary, id, snapshot).thenCompose(aMatchingFragmentKv -> {
             Tuple keyTuple = primary.unpack(aMatchingFragmentKv.getKey());
             Tuple versionTuple = keyTuple.getNestedTuple(1);
+            String path = keyTuple.getString(2);
             if (!version.equals(versionTuple)) {
-                return null; // false-positive index-match on older version
+                return CompletableFuture.completedFuture(null); // false-positive index-match on older version
             }
-            if (DELETED_MARKER.equals(keyTuple.getString(2))) {
+            if (DELETED_MARKER.equals(path)) {
                 // Version was overwritten in primary by a delete-marker, schedule task to remove index fragment.
-                persistence.db.runAsync(trn -> doClearKeyValue(trn, aMatchingFragmentKv)).exceptionally(throwable -> {
+                persistence.db.runAsync(trn -> {
+                    trn.clear(aMatchingFragmentKv.getKey());
+                    return CompletableFuture.completedFuture((Void) null);
+                }).exceptionally(throwable -> {
                     throwable.printStackTrace();
                     return null;
                 });
-                return CompletableFuture.completedFuture(new Document(namespace, entity, id, toTimestamp(versionTuple), Collections.emptyMap(), true));
+                return CompletableFuture.completedFuture(null);
             }
-            return persistence.getDocument(snapshot, transaction, statistics, namespace, entity, id, versionTuple, 1).thenApply(doc -> {
-                if (doc == null) {
-                    persistence.db.runAsync(trn -> doClearKeyValue(trn, aMatchingFragmentKv)).exceptionally(throwable -> {
-                        throwable.printStackTrace();
-                        return null;
-                    });
-                    return null;
-                }
-                if (!value.equals(doc.getFragmentByPath().get(path).getValue())) {
-                    // false-positive due to either index-value-truncation or value occupying multiple key-value slots
-                    return null;
-                }
-                documents.add(doc);
-                return doc;
-            });
+
+            // NOTE It's possible to get false-positive due to either index-value-truncation or value occupying
+            // multiple key-value slots. These must be discarded by client or the buffered persistence layer.
+
+            AsyncIterable<KeyValue> range = transaction.getRange(primary.range(Tuple.from(id, version)), PRIMARY_INDEX);
+            AsyncIterator<KeyValue> iterator = range.iterator();
+            PrimaryIterator primaryIterator = new PrimaryIterator(subscription, snapshot, transaction, namespace, entity, null, primary, iterator, limit);
+            iterator.onHasNext().thenAccept(primaryIterator);
+            return primaryIterator.doneSignal;
         });
     }
 
     void onHasNoMore() {
-        for (Tuple version : versions.descendingSet()) {
-            if (version.compareTo(snapshot) <= 0) {
+        for (Tuple version : versions) {
+            if (version.compareTo(snapshot) >= 0) {
                 indexMatches.incrementAndGet();
-                primaryLookupFutures.add(onIndexMatch(versionsId.get(), version));
-                break;
+                onIndexMatch(versionsId.get(), version).thenAccept(v -> {
+                    signalComplete();
+                });
+                return;
             }
         }
-        CompletableFuture.allOf(primaryLookupFutures.toArray(CompletableFuture[]::new)).join();
-        result.complete(PersistenceResult.readResult(List.copyOf(documents), false, statistics));
+        signalComplete();
     }
 
-    private CompletableFuture<PersistenceResult> doClearKeyValue(Transaction trn, KeyValue aMatchingFragmentKv) {
-        FoundationDBStatistics stat = new FoundationDBStatistics();
-        trn.clear(aMatchingFragmentKv.getKey());
-        stat.clearKeyValue(PATH_VALUE_INDEX);
-        return CompletableFuture.completedFuture(PersistenceResult.writeResult(stat));
+    private void signalComplete() {
+        if (fragmentsPublished.get() == 0) {
+            // no elements in iterator
+            subscription.onNext(Fragment.DONE_NOT_LIMITED);
+        }
+        subscription.onComplete();
     }
-
 }
