@@ -13,7 +13,7 @@ import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.P
 class FindAllPublisher implements Flow.Publisher<Fragment> {
 
     final FoundationDBPersistence persistence;
-    final FoundationDBTransaction transaction;
+    final OrderedKeyValueTransaction transaction;
     final Tuple snapshot;
     final String namespace;
     final String entity;
@@ -21,7 +21,7 @@ class FindAllPublisher implements Flow.Publisher<Fragment> {
 
     final AtomicReference<Flow.Subscriber<? super Fragment>> subscriberRef = new AtomicReference<>();
 
-    FindAllPublisher(FoundationDBPersistence persistence, FoundationDBTransaction transaction, Tuple snapshot, String namespace, String entity, int limit) {
+    FindAllPublisher(FoundationDBPersistence persistence, OrderedKeyValueTransaction transaction, Tuple snapshot, String namespace, String entity, int limit) {
         this.persistence = persistence;
         this.transaction = transaction;
         this.snapshot = snapshot;
@@ -33,7 +33,7 @@ class FindAllPublisher implements Flow.Publisher<Fragment> {
     @Override
     public void subscribe(Flow.Subscriber<? super Fragment> subscriber) {
         subscriberRef.set(subscriber);
-        FoundationDBSubscription subscription = new FoundationDBSubscription(persistence.db, subscriber);
+        FoundationDBSubscription subscription = new FoundationDBSubscription(subscriber);
         subscription.registerFirstRequest(n -> doReadVersions(subscription, n));
         subscriber.onSubscribe(subscription);
     }

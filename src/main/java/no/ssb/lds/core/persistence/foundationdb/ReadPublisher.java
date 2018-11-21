@@ -3,7 +3,7 @@ package no.ssb.lds.core.persistence.foundationdb;
 import com.apple.foundationdb.KeyValue;
 import com.apple.foundationdb.async.AsyncIterable;
 import com.apple.foundationdb.async.AsyncIterator;
-import com.apple.foundationdb.directory.DirectorySubspace;
+import com.apple.foundationdb.subspace.Subspace;
 import com.apple.foundationdb.tuple.Tuple;
 import no.ssb.lds.api.persistence.Fragment;
 
@@ -19,16 +19,16 @@ import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.t
 class ReadPublisher implements Flow.Publisher<Fragment> {
 
     final FoundationDBPersistence persistence;
-    final FoundationDBTransaction transaction;
+    final OrderedKeyValueTransaction transaction;
     final Tuple snapshot;
     final String namespace;
     final String entity;
     final String id;
 
     final AtomicReference<Flow.Subscriber<? super Fragment>> subscriberRef = new AtomicReference<>();
-    final AtomicReference<DirectorySubspace> primaryRef = new AtomicReference<>();
+    final AtomicReference<Subspace> subspaceRef = new AtomicReference<>();
 
-    ReadPublisher(FoundationDBPersistence persistence, FoundationDBTransaction transaction, Tuple snapshot, String namespace, String entity, String id) {
+    ReadPublisher(FoundationDBPersistence persistence, OrderedKeyValueTransaction transaction, Tuple snapshot, String namespace, String entity, String id) {
         this.persistence = persistence;
         this.transaction = transaction;
         this.snapshot = snapshot;
@@ -40,16 +40,16 @@ class ReadPublisher implements Flow.Publisher<Fragment> {
     @Override
     public void subscribe(Flow.Subscriber<? super Fragment> subscriber) {
         subscriberRef.set(subscriber);
-        FoundationDBSubscription subscription = new FoundationDBSubscription(persistence.db, subscriber);
+        FoundationDBSubscription subscription = new FoundationDBSubscription(subscriber);
         subscription.registerFirstRequest(n -> doRead(subscription, n));
         subscriber.onSubscribe(subscription);
     }
 
     void doRead(FoundationDBSubscription subscription, long n) {
-        DirectorySubspace primary = primaryRef.get();
+        Subspace primary = subspaceRef.get();
         if (primary == null) {
             persistence.getPrimary(namespace, entity).thenAccept(p -> {
-                primaryRef.set(p);
+                subspaceRef.set(p);
                 doRead(subscription, n);
             });
             return;
@@ -85,7 +85,7 @@ class ReadPublisher implements Flow.Publisher<Fragment> {
         });
     }
 
-    static void publishDocuments(FoundationDBSubscription subscription, Tuple snapshot, FoundationDBTransaction transaction, DirectorySubspace primary, String namespace, String entity, String id, Tuple version, int limit) {
+    static void publishDocuments(FoundationDBSubscription subscription, Tuple snapshot, OrderedKeyValueTransaction transaction, Subspace primary, String namespace, String entity, String id, Tuple version, int limit) {
         AsyncIterable<KeyValue> range = transaction.getRange(primary.range(Tuple.from(id, version)), PRIMARY_INDEX);
         AsyncIterator<KeyValue> iterator = range.iterator();
         PrimaryIterator primaryIterator = new PrimaryIterator(subscription, snapshot, transaction, namespace, entity, null, primary, iterator, limit);

@@ -1,7 +1,7 @@
 package no.ssb.lds.core.persistence.foundationdb;
 
 import com.apple.foundationdb.Range;
-import com.apple.foundationdb.directory.DirectorySubspace;
+import com.apple.foundationdb.subspace.Subspace;
 import com.apple.foundationdb.tuple.Tuple;
 import no.ssb.lds.api.persistence.Fragment;
 
@@ -56,9 +56,9 @@ public class CreateOrOverwriteSubscriber implements Flow.Subscriber<Fragment> {
     final CompletableFuture<Void> result;
 
     final AtomicReference<Flow.Subscription> subscriptionRef = new AtomicReference<>();
-    final FoundationDBTransaction transaction;
-    final AtomicReference<DirectorySubspace> primaryRef = new AtomicReference<>();
-    final Map<Tuple, DirectorySubspace> indexByTuple = new ConcurrentHashMap<>();
+    final OrderedKeyValueTransaction transaction;
+    final AtomicReference<Subspace> subspaceRef = new AtomicReference<>();
+    final Map<Tuple, Subspace> indexByTuple = new ConcurrentHashMap<>();
 
     final CopyOnWriteArraySet<Range> clearedRanges = new CopyOnWriteArraySet<>();
     final CharsetEncoder encoder = StandardCharsets.UTF_8.newEncoder();
@@ -66,7 +66,7 @@ public class CreateOrOverwriteSubscriber implements Flow.Subscriber<Fragment> {
 
     final Map<Fragment, OnNextElement> onNextMapQueue = Collections.synchronizedMap(new LinkedHashMap<>());
 
-    public CreateOrOverwriteSubscriber(FoundationDBPersistence persistence, CompletableFuture<Void> result, FoundationDBTransaction transaction) {
+    public CreateOrOverwriteSubscriber(FoundationDBPersistence persistence, CompletableFuture<Void> result, OrderedKeyValueTransaction transaction) {
         this.persistence = persistence;
         this.result = result;
         this.transaction = transaction;
@@ -92,10 +92,10 @@ public class CreateOrOverwriteSubscriber implements Flow.Subscriber<Fragment> {
                 }
             }
 
-            DirectorySubspace primary = primaryRef.get();
+            Subspace primary = subspaceRef.get();
             if (primary == null) {
                 persistence.getPrimary(fragment.namespace(), fragment.entity()).thenAccept(p -> {
-                    primaryRef.set(p);
+                    subspaceRef.set(p);
                     onNext(fragment);
                 });
                 return;
@@ -105,7 +105,7 @@ public class CreateOrOverwriteSubscriber implements Flow.Subscriber<Fragment> {
             String indexUnawarePath = Fragment.computeIndexUnawarePath(fragment.path(), arrayIndices);
 
             Tuple indexTuple = Tuple.from(fragment.namespace(), fragment.entity(), indexUnawarePath);
-            DirectorySubspace index = indexByTuple.get(indexTuple);
+            Subspace index = indexByTuple.get(indexTuple);
             if (index == null) {
                 persistence.getIndex(fragment.namespace(), fragment.entity(), indexUnawarePath).thenAccept(i -> {
                     indexByTuple.put(indexTuple, i);

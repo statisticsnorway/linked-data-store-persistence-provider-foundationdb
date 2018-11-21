@@ -3,7 +3,7 @@ package no.ssb.lds.core.persistence.foundationdb;
 import com.apple.foundationdb.KeyValue;
 import com.apple.foundationdb.async.AsyncIterable;
 import com.apple.foundationdb.async.AsyncIterator;
-import com.apple.foundationdb.directory.DirectorySubspace;
+import com.apple.foundationdb.subspace.Subspace;
 import com.apple.foundationdb.tuple.Tuple;
 import no.ssb.lds.api.persistence.Fragment;
 
@@ -16,6 +16,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static no.ssb.lds.api.persistence.Fragment.DELETED_MARKER;
+import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.PATH_VALUE_INDEX;
 import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.PRIMARY_INDEX;
 
 class PathValueIndexIterator implements Consumer<Boolean> {
@@ -23,10 +24,10 @@ class PathValueIndexIterator implements Consumer<Boolean> {
     final FoundationDBSubscription subscription;
     final FoundationDBPersistence persistence;
     final Tuple snapshot;
-    final FoundationDBTransaction transaction;
+    final OrderedKeyValueTransaction transaction;
     final AsyncIterator<KeyValue> rangeIterator;
-    final DirectorySubspace primary;
-    final DirectorySubspace index;
+    final Subspace primary;
+    final Subspace index;
     final NavigableSet<Tuple> versions;
     final String namespace;
     final String entity;
@@ -41,7 +42,7 @@ class PathValueIndexIterator implements Consumer<Boolean> {
 
     final AtomicInteger fragmentsPublished = new AtomicInteger(0);
 
-    PathValueIndexIterator(FoundationDBSubscription subscription, FoundationDBPersistence persistence, Tuple snapshot, FoundationDBTransaction transaction, AsyncIterator<KeyValue> rangeIterator, DirectorySubspace primary, DirectorySubspace index, NavigableSet<Tuple> versions, String namespace, String entity, String path, String value, int limit) {
+    PathValueIndexIterator(FoundationDBSubscription subscription, FoundationDBPersistence persistence, Tuple snapshot, OrderedKeyValueTransaction transaction, AsyncIterator<KeyValue> rangeIterator, Subspace primary, Subspace index, NavigableSet<Tuple> versions, String namespace, String entity, String path, String value, int limit) {
         this.subscription = subscription;
         this.persistence = persistence;
         this.snapshot = snapshot;
@@ -130,10 +131,10 @@ class PathValueIndexIterator implements Consumer<Boolean> {
                 return CompletableFuture.completedFuture(null); // false-positive index-match on older version
             }
             if (DELETED_MARKER.equals(path)) {
-                // Version was overwritten in primary by a delete-marker, schedule task to remove index fragment.
-                persistence.db.runAsync(trn -> {
-                    trn.clear(aMatchingFragmentKv.getKey());
-                    return CompletableFuture.completedFuture((Void) null);
+                // Version was overwritten in primary by a delete-marker, remove index fragment asynchronously in separate transaction.
+                persistence.transactionFactory().runAsyncInIsolatedTransaction(tx -> {
+                    ((OrderedKeyValueTransaction) tx).clear(aMatchingFragmentKv.getKey(), PATH_VALUE_INDEX);
+                    return null;
                 }).exceptionally(throwable -> {
                     throwable.printStackTrace();
                     return null;

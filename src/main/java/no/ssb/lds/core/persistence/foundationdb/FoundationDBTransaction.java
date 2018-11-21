@@ -5,12 +5,11 @@ import com.apple.foundationdb.KeyValue;
 import com.apple.foundationdb.Range;
 import com.apple.foundationdb.StreamingMode;
 import com.apple.foundationdb.async.AsyncIterable;
-import no.ssb.lds.api.persistence.Transaction;
 import no.ssb.lds.api.persistence.TransactionStatistics;
 
 import java.util.concurrent.CompletableFuture;
 
-public class FoundationDBTransaction implements Transaction {
+public class FoundationDBTransaction implements OrderedKeyValueTransaction {
 
     private final com.apple.foundationdb.Transaction fdbTrans;
     private final FoundationDBStatistics statistics = new FoundationDBStatistics();
@@ -28,6 +27,12 @@ public class FoundationDBTransaction implements Transaction {
     public CompletableFuture<TransactionStatistics> cancel() {
         fdbTrans.cancel();
         return CompletableFuture.completedFuture(statistics);
+    }
+
+    @Override
+    public void close() {
+        OrderedKeyValueTransaction.super.close();
+        fdbTrans.close();
     }
 
     public void clearRange(Range range, String index) {

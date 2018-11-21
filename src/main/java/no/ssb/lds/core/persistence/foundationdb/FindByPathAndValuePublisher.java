@@ -13,10 +13,10 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.PATH_VALUE_INDEX;
 
-class FindPublisher implements Flow.Publisher<Fragment> {
+class FindByPathAndValuePublisher implements Flow.Publisher<Fragment> {
 
     final FoundationDBPersistence persistence;
-    final FoundationDBTransaction transaction;
+    final OrderedKeyValueTransaction transaction;
     final Tuple snapshot;
     final String namespace;
     final String entity;
@@ -26,7 +26,7 @@ class FindPublisher implements Flow.Publisher<Fragment> {
 
     final AtomicReference<Flow.Subscriber<? super Fragment>> subscriberRef = new AtomicReference<>();
 
-    FindPublisher(FoundationDBPersistence persistence, FoundationDBTransaction transaction, Tuple snapshot, String namespace, String entity, String path, String value, int limit) {
+    FindByPathAndValuePublisher(FoundationDBPersistence persistence, OrderedKeyValueTransaction transaction, Tuple snapshot, String namespace, String entity, String path, String value, int limit) {
         this.persistence = persistence;
         this.transaction = transaction;
         this.snapshot = snapshot;
@@ -40,7 +40,7 @@ class FindPublisher implements Flow.Publisher<Fragment> {
     @Override
     public void subscribe(Flow.Subscriber<? super Fragment> subscriber) {
         subscriberRef.set(subscriber);
-        FoundationDBSubscription subscription = new FoundationDBSubscription(persistence.db, subscriber);
+        FoundationDBSubscription subscription = new FoundationDBSubscription(subscriber);
         subscription.registerFirstRequest(n -> doReadVersions(subscription, n));
         subscriber.onSubscribe(subscription);
     }

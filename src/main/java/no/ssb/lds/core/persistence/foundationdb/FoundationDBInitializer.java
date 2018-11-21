@@ -40,7 +40,7 @@ public class FoundationDBInitializer implements PersistenceInitializer {
         byte[] nodePrefix = hexToBytes(nodePrefixHex);
         byte[] contentPrefix = hexToBytes(contentPrefixHex);
         Directory directory = new DirectoryLayer(new Subspace(nodePrefix), new Subspace(contentPrefix));
-        FoundationDBPersistence persistence = new FoundationDBPersistence(db, directory);
+        FoundationDBPersistence persistence = new FoundationDBPersistence(new FoundationDBTransactionFactory(db), new DefaultFoundationDBDirectory(db, directory));
         return persistence;
     }
 

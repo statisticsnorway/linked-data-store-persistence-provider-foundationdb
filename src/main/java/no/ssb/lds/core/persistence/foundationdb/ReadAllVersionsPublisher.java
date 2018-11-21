@@ -2,7 +2,7 @@ package no.ssb.lds.core.persistence.foundationdb;
 
 import com.apple.foundationdb.KeyValue;
 import com.apple.foundationdb.async.AsyncIterator;
-import com.apple.foundationdb.directory.DirectorySubspace;
+import com.apple.foundationdb.subspace.Subspace;
 import com.apple.foundationdb.tuple.Tuple;
 import no.ssb.lds.api.persistence.Fragment;
 
@@ -14,16 +14,16 @@ import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.P
 class ReadAllVersionsPublisher implements Flow.Publisher<Fragment> {
 
     final FoundationDBPersistence persistence;
-    final FoundationDBTransaction transaction;
+    final OrderedKeyValueTransaction transaction;
     final String namespace;
     final String entity;
     final String id;
     final int limit;
 
     final AtomicReference<Flow.Subscriber<? super Fragment>> subscriberRef = new AtomicReference<>();
-    final AtomicReference<DirectorySubspace> primaryRef = new AtomicReference<>();
+    final AtomicReference<Subspace> subspaceRef = new AtomicReference<>();
 
-    ReadAllVersionsPublisher(FoundationDBPersistence persistence, FoundationDBTransaction transaction, String namespace, String entity, String id, int limit) {
+    ReadAllVersionsPublisher(FoundationDBPersistence persistence, OrderedKeyValueTransaction transaction, String namespace, String entity, String id, int limit) {
         this.persistence = persistence;
         this.transaction = transaction;
         this.namespace = namespace;
@@ -35,16 +35,16 @@ class ReadAllVersionsPublisher implements Flow.Publisher<Fragment> {
     @Override
     public void subscribe(Flow.Subscriber<? super Fragment> subscriber) {
         subscriberRef.set(subscriber);
-        FoundationDBSubscription subscription = new FoundationDBSubscription(persistence.db, subscriber);
+        FoundationDBSubscription subscription = new FoundationDBSubscription(subscriber);
         subscription.registerFirstRequest(n -> doReadVersions(subscription, n));
         subscriber.onSubscribe(subscription);
     }
 
     void doReadVersions(FoundationDBSubscription subscription, long n) {
-        DirectorySubspace primary = primaryRef.get();
+        Subspace primary = subspaceRef.get();
         if (primary == null) {
             persistence.getPrimary(namespace, entity).thenAccept(p -> {
-                primaryRef.set(p);
+                subspaceRef.set(p);
                 doReadVersions(subscription, n);
             });
             return;

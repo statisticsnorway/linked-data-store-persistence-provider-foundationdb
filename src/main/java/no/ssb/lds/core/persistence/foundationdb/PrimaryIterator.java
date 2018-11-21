@@ -2,7 +2,7 @@ package no.ssb.lds.core.persistence.foundationdb;
 
 import com.apple.foundationdb.KeyValue;
 import com.apple.foundationdb.async.AsyncIterator;
-import com.apple.foundationdb.directory.DirectorySubspace;
+import com.apple.foundationdb.subspace.Subspace;
 import com.apple.foundationdb.tuple.Tuple;
 import no.ssb.lds.api.persistence.Fragment;
 
@@ -24,10 +24,10 @@ class PrimaryIterator implements Consumer<Boolean> {
 
     final FoundationDBSubscription subscription;
     final Tuple snapshot;
-    final FoundationDBTransaction transaction;
+    final OrderedKeyValueTransaction transaction;
     final String namespace;
     final String entity;
-    final DirectorySubspace primary;
+    final Subspace primary;
     final AsyncIterator<KeyValue> iterator;
     final NavigableSet<String> remainingIds;
     final int limit;
@@ -45,7 +45,7 @@ class PrimaryIterator implements Consumer<Boolean> {
     // signalled with number of fragments published by this iterator
     final CompletableFuture<Integer> doneSignal = new CompletableFuture<>();
 
-    PrimaryIterator(FoundationDBSubscription subscription, Tuple snapshot, FoundationDBTransaction transaction, String namespace, String entity, NavigableSet<String> ids, DirectorySubspace primary, AsyncIterator<KeyValue> iterator, int limit) {
+    PrimaryIterator(FoundationDBSubscription subscription, Tuple snapshot, OrderedKeyValueTransaction transaction, String namespace, String entity, NavigableSet<String> ids, Subspace primary, AsyncIterator<KeyValue> iterator, int limit) {
         this.subscription = subscription;
         this.snapshot = snapshot;
         this.transaction = transaction;
