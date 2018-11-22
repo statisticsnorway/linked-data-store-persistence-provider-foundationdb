@@ -155,9 +155,7 @@ public class FoundationDBPersistence implements Persistence {
     }
 
     private CompletableFuture<Void> doDelete(OrderedKeyValueTransaction transaction, String namespace, String entity, String id, Tuple version, PersistenceDeletePolicy policy) {
-        CompletableFuture<Void> result = new CompletableFuture<>();
-
-        getPrimary(namespace, entity).thenAccept(primary -> {
+        return getPrimary(namespace, entity).thenCompose(primary -> {
 
             /*
              * Get all fragments of given versioned resource.
@@ -168,13 +166,10 @@ public class FoundationDBPersistence implements Persistence {
             CompletableFuture<Void> fragmentsDeletedSignal = new CompletableFuture<>();
             iterator.onHasNext().thenAccept(doDeleteAllIndexFragments(fragmentsDeletedSignal, transaction, namespace, entity, primary, iterator));
 
-            fragmentsDeletedSignal.thenAccept(v -> {
+            return fragmentsDeletedSignal.thenAccept(v -> {
                 transaction.clearRange(range, PRIMARY_INDEX);
-                result.complete(null);
             });
         });
-
-        return result;
     }
 
     @Override
@@ -183,9 +178,7 @@ public class FoundationDBPersistence implements Persistence {
     }
 
     private CompletableFuture<Void> doDeleteAllVersions(OrderedKeyValueTransaction transaction, String namespace, String entity, String id, PersistenceDeletePolicy policy) {
-        CompletableFuture<Void> result = new CompletableFuture<>();
-
-        getPrimary(namespace, entity).thenAccept(primary -> {
+        return getPrimary(namespace, entity).thenCompose(primary -> {
 
             /*
              * Get all fragments of all versions of resource.
@@ -196,13 +189,11 @@ public class FoundationDBPersistence implements Persistence {
             CompletableFuture<Void> fragmentsDeletedSignal = new CompletableFuture<>();
             iterator.onHasNext().thenAccept(doDeleteAllIndexFragments(fragmentsDeletedSignal, transaction, namespace, entity, primary, iterator));
 
-            fragmentsDeletedSignal.thenAccept(v -> {
+            return fragmentsDeletedSignal.thenApply(v -> {
                 transaction.clearRange(range, PRIMARY_INDEX);
-                result.complete(null);
+                return null;
             });
         });
-
-        return result;
     }
 
     private Consumer<Boolean> doDeleteAllIndexFragments(CompletableFuture<Void> fragmentsDeletedSignal, OrderedKeyValueTransaction transaction, String namespace, String entity, Subspace primary, AsyncIterator<KeyValue> iterator) {

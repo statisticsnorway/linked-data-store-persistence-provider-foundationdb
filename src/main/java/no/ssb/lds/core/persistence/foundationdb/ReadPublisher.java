@@ -46,43 +46,53 @@ class ReadPublisher implements Flow.Publisher<Fragment> {
     }
 
     void doRead(FoundationDBSubscription subscription, long n) {
-        Subspace primary = subspaceRef.get();
-        if (primary == null) {
-            persistence.getPrimary(namespace, entity).thenAccept(p -> {
-                subspaceRef.set(p);
-                doRead(subscription, n);
-            });
-            return;
-        }
-
-        /*
-         * Determine the correct version timestamp of the document to use. Will perform a database access and fetch at most one key-value
-         */
-        findAnyOneMatchingFragmentInPrimary(transaction, primary, id, snapshot).thenAccept(aMatchingKeyValue -> {
-            Flow.Subscriber<? super Fragment> subscriber = subscriberRef.get();
-
-            if (aMatchingKeyValue == null) {
-                // document not found
-                subscriber.onNext(Fragment.DONE_NOT_LIMITED);
-                subscriber.onComplete();
-            }
-            if (!primary.contains(aMatchingKeyValue.getKey())) {
-                subscriber.onNext(Fragment.DONE_NOT_LIMITED);
-                subscriber.onComplete();
-            }
-            Tuple key = primary.unpack(aMatchingKeyValue.getKey());
-            Tuple version = key.getNestedTuple(1);
-            String path = key.getString(2);
-            if (DELETED_MARKER.equals(path)) {
-                subscriber.onNext(new Fragment(namespace, entity, id, toTimestamp(version), DELETED_MARKER, 0, EMPTY_BYTE_ARRAY));
-                subscriber.onComplete();
+        try {
+            Subspace primary = subspaceRef.get();
+            if (primary == null) {
+                persistence.getPrimary(namespace, entity).thenAccept(p -> {
+                    subspaceRef.set(p);
+                    doRead(subscription, n);
+                }).exceptionally(t -> {
+                    subscription.onError(t);
+                    return null;
+                });
+                return;
             }
 
             /*
-             * Get document with given version.
+             * Determine the correct version timestamp of the document to use. Will perform a database access and fetch at most one key-value
              */
-            publishDocuments(subscription, snapshot, transaction, primary, namespace, entity, id, version, Integer.MAX_VALUE);
-        });
+            findAnyOneMatchingFragmentInPrimary(transaction, primary, id, snapshot).thenAccept(aMatchingKeyValue -> {
+                Flow.Subscriber<? super Fragment> subscriber = subscriberRef.get();
+
+                if (aMatchingKeyValue == null) {
+                    // document not found
+                    subscriber.onNext(Fragment.DONE_NOT_LIMITED);
+                    subscriber.onComplete();
+                }
+                if (!primary.contains(aMatchingKeyValue.getKey())) {
+                    subscriber.onNext(Fragment.DONE_NOT_LIMITED);
+                    subscriber.onComplete();
+                }
+                Tuple key = primary.unpack(aMatchingKeyValue.getKey());
+                Tuple version = key.getNestedTuple(1);
+                String path = key.getString(2);
+                if (DELETED_MARKER.equals(path)) {
+                    subscriber.onNext(new Fragment(namespace, entity, id, toTimestamp(version), DELETED_MARKER, 0, EMPTY_BYTE_ARRAY));
+                    subscriber.onComplete();
+                }
+
+                /*
+                 * Get document with given version.
+                 */
+                publishDocuments(subscription, snapshot, transaction, primary, namespace, entity, id, version, Integer.MAX_VALUE);
+            }).exceptionally(t -> {
+                subscription.onError(t);
+                return null;
+            });
+        } catch (Throwable t) {
+            subscription.onError(t);
+        }
     }
 
     static void publishDocuments(FoundationDBSubscription subscription, Tuple snapshot, OrderedKeyValueTransaction transaction, Subspace primary, String namespace, String entity, String id, Tuple version, int limit) {
