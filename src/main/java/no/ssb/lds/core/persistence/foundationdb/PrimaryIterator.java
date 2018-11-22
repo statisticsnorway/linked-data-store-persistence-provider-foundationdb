@@ -68,7 +68,7 @@ class PrimaryIterator implements Consumer<Boolean> {
         String name = Thread.currentThread().getName();
         if (!processingThreads.contains(name)) {
             processingThreads.add(name);
-            System.out.format("%s :: %s :: accept()%n", Thread.currentThread().getName(), this.toString());
+            // System.out.format("%s :: %s :: accept()%n", Thread.currentThread().getName(), this.toString());
         }
     }
 
