@@ -6,11 +6,11 @@ import com.apple.foundationdb.async.AsyncIterator;
 import com.apple.foundationdb.subspace.Subspace;
 import com.apple.foundationdb.tuple.Tuple;
 import no.ssb.lds.api.persistence.Fragment;
+import no.ssb.lds.api.persistence.FragmentType;
 
 import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static no.ssb.lds.api.persistence.Fragment.DELETED_MARKER;
 import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.EMPTY_BYTE_ARRAY;
 import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.PRIMARY_INDEX;
 import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.findAnyOneMatchingFragmentInPrimary;
@@ -76,9 +76,9 @@ class ReadPublisher implements Flow.Publisher<Fragment> {
                 }
                 Tuple key = primary.unpack(aMatchingKeyValue.getKey());
                 Tuple version = key.getNestedTuple(1);
-                String path = key.getString(2);
-                if (DELETED_MARKER.equals(path)) {
-                    subscriber.onNext(new Fragment(namespace, entity, id, toTimestamp(version), DELETED_MARKER, 0, EMPTY_BYTE_ARRAY));
+                FragmentType fragmentType = FragmentType.fromTypeCode(key.getBytes(3)[0]);
+                if (FragmentType.DELETED.equals(fragmentType)) {
+                    subscriber.onNext(new Fragment(namespace, entity, id, toTimestamp(version), "", FragmentType.DELETED, 0, EMPTY_BYTE_ARRAY));
                     subscriber.onComplete();
                 }
 

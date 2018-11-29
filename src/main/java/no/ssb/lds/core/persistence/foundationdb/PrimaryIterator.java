@@ -5,6 +5,7 @@ import com.apple.foundationdb.async.AsyncIterator;
 import com.apple.foundationdb.subspace.Subspace;
 import com.apple.foundationdb.tuple.Tuple;
 import no.ssb.lds.api.persistence.Fragment;
+import no.ssb.lds.api.persistence.FragmentType;
 
 import java.util.Collections;
 import java.util.NavigableSet;
@@ -79,6 +80,7 @@ class PrimaryIterator implements Consumer<Boolean> {
 
     @Override
     public void accept(Boolean hasNext) {
+        // TODO avoid stack-overflow due to recursion depth increasing with number of fragments
         try {
             checkAndRecordProcessingThread();
             if (hasNext) {
@@ -108,7 +110,9 @@ class PrimaryIterator implements Consumer<Boolean> {
         String dbId = keyTuple.getString(0);
         Tuple version = keyTuple.getNestedTuple(1);
         String path = keyTuple.getString(2);
-        long offset = keyTuple.getLong(3);
+        byte fragmentTypeCode = keyTuple.getBytes(3)[0];
+        FragmentType fragmentType = FragmentType.fromTypeCode(fragmentTypeCode);
+        long offset = keyTuple.getLong(4);
 
         if (remainingIds != null) {
             if (remainingIds.isEmpty()) {
@@ -160,12 +164,12 @@ class PrimaryIterator implements Consumer<Boolean> {
 
         if (fragmentsPublished.get() >= limit) {
             // reached limit and there are more matching fragments.
-            subscription.onNext(new Fragment(true, Fragment.LIMITED_CODE, namespace, entity, dbId, toTimestamp(version), path, offset, EMPTY_BYTE_ARRAY));
+            subscription.onNext(new Fragment(true, Fragment.LIMITED_CODE, namespace, entity, dbId, toTimestamp(version), path, fragmentType, offset, EMPTY_BYTE_ARRAY));
             signalComplete();
             return;
         }
 
-        if (!fragmentToPublish.compareAndSet(null, new Fragment(namespace, entity, dbId, toTimestamp(version), path, offset, kv.getValue()))) {
+        if (!fragmentToPublish.compareAndSet(null, new Fragment(namespace, entity, dbId, toTimestamp(version), path, fragmentType, offset, kv.getValue()))) {
             throw new IllegalStateException("Previous fragment was not published!");
         }
 

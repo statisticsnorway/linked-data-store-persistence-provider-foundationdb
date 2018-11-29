@@ -27,7 +27,7 @@ import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.t
 
 public class CreateOrOverwriteSubscriber implements Flow.Subscriber<Fragment> {
 
-    static final Fragment ON_COMPLETE = new Fragment(null, null, null, null, null, -90123, null);
+    static final Fragment ON_COMPLETE = new Fragment(null, null, null, null, null, null, -90123, null);
 
     static class OnNextElement {
         final Fragment fragment;
@@ -120,8 +120,7 @@ public class CreateOrOverwriteSubscriber implements Flow.Subscriber<Fragment> {
 
                 // Clear primary of existing document with same version
                 Range range = primary.range(Tuple.from(fragment.id(), fragmentVersion));
-                if (!clearedRanges.contains(range)) {
-                    clearedRanges.add(range);
+                if (clearedRanges.add(range)) {
                     transaction.clearRange(range, PRIMARY_INDEX);
                 }
 
@@ -143,6 +142,7 @@ public class CreateOrOverwriteSubscriber implements Flow.Subscriber<Fragment> {
                         fragment.id(),
                         fragmentVersion,
                         fragment.path(),
+                        new byte[]{fragment.fragmentType().getTypeCode()},
                         fragment.offset()
                 );
                 byte[] binaryPrimaryKey = primary.pack(primaryKey);

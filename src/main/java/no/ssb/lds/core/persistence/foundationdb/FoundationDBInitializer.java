@@ -6,11 +6,13 @@ import com.apple.foundationdb.directory.Directory;
 import com.apple.foundationdb.directory.DirectoryLayer;
 import com.apple.foundationdb.subspace.Subspace;
 import no.ssb.lds.api.persistence.PersistenceInitializer;
+import no.ssb.lds.api.persistence.ProviderName;
 
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
 
+@ProviderName("foundationdb")
 public class FoundationDBInitializer implements PersistenceInitializer {
     @Override
     public String persistenceProviderId() {

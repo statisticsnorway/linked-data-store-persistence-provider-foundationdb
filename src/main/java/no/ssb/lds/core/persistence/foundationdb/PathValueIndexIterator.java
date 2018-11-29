@@ -6,6 +6,7 @@ import com.apple.foundationdb.async.AsyncIterator;
 import com.apple.foundationdb.subspace.Subspace;
 import com.apple.foundationdb.tuple.Tuple;
 import no.ssb.lds.api.persistence.Fragment;
+import no.ssb.lds.api.persistence.FragmentType;
 
 import java.nio.charset.StandardCharsets;
 import java.util.NavigableSet;
@@ -15,7 +16,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
-import static no.ssb.lds.api.persistence.Fragment.DELETED_MARKER;
 import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.PATH_VALUE_INDEX;
 import static no.ssb.lds.core.persistence.foundationdb.FoundationDBPersistence.PRIMARY_INDEX;
 
@@ -126,11 +126,11 @@ class PathValueIndexIterator implements Consumer<Boolean> {
         return persistence.findAnyOneMatchingFragmentInPrimary(transaction, primary, id, snapshot).thenCompose(aMatchingFragmentKv -> {
             Tuple keyTuple = primary.unpack(aMatchingFragmentKv.getKey());
             Tuple versionTuple = keyTuple.getNestedTuple(1);
-            String path = keyTuple.getString(2);
+            FragmentType fragmentType = FragmentType.fromTypeCode(keyTuple.getBytes(3)[0]);
             if (!version.equals(versionTuple)) {
                 return CompletableFuture.completedFuture(null); // false-positive index-match on older version
             }
-            if (DELETED_MARKER.equals(path)) {
+            if (FragmentType.DELETED.equals(fragmentType)) {
                 // Version was overwritten in primary by a delete-marker, remove index fragment asynchronously in separate transaction.
                 persistence.transactionFactory().runAsyncInIsolatedTransaction(tx -> {
                     ((OrderedKeyValueTransaction) tx).clear(aMatchingFragmentKv.getKey(), PATH_VALUE_INDEX);

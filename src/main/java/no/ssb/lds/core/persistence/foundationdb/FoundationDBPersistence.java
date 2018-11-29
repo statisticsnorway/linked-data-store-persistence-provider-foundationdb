@@ -9,6 +9,7 @@ import com.apple.foundationdb.async.AsyncIterator;
 import com.apple.foundationdb.subspace.Subspace;
 import com.apple.foundationdb.tuple.Tuple;
 import no.ssb.lds.api.persistence.Fragment;
+import no.ssb.lds.api.persistence.FragmentType;
 import no.ssb.lds.api.persistence.Persistence;
 import no.ssb.lds.api.persistence.PersistenceDeletePolicy;
 import no.ssb.lds.api.persistence.PersistenceException;
@@ -22,8 +23,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Flow;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
-
-import static no.ssb.lds.api.persistence.Fragment.DELETED_MARKER;
 
 public class FoundationDBPersistence implements Persistence {
 
@@ -209,14 +208,16 @@ public class FoundationDBPersistence implements Persistence {
                 String id = key.getString(0);
                 Tuple version = key.getNestedTuple(1);
                 String path = key.getString(2);
-                long offset = key.getLong(3);
+                byte fragmentTypeCode = key.getBytes(3)[0];
+                FragmentType fragmentType = FragmentType.fromTypeCode(fragmentTypeCode);
+                long offset = key.getLong(4);
 
                 if (offset > 0) {
                     iterator.onHasNext().thenAccept(doDeleteAllIndexFragments(fragmentsDeletedSignal, transaction, namespace, entity, primary, iterator));
                     return;
                 }
 
-                Fragment fragment = new Fragment(namespace, entity, id, toTimestamp(version), path, 0, kv.getValue());
+                Fragment fragment = new Fragment(namespace, entity, id, toTimestamp(version), path, fragmentType, 0, kv.getValue());
                 ArrayList<Integer> indices = new ArrayList<>();
                 String indexUnawarePath = Fragment.computeIndexUnawarePath(path, indices);
                 Tuple arrayIndices = Tuple.from(indices);
@@ -256,7 +257,8 @@ public class FoundationDBPersistence implements Persistence {
             Tuple primaryKey = Tuple.from(
                     id,
                     version,
-                    DELETED_MARKER,
+                    "",
+                    new byte[]{FragmentType.DELETED.getTypeCode()},
                     0
             );
             byte[] binaryPrimaryKey = primary.pack(primaryKey);
