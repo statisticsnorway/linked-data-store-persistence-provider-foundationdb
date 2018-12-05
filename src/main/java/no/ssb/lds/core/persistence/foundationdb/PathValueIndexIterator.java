@@ -8,7 +8,7 @@ import com.apple.foundationdb.tuple.Tuple;
 import no.ssb.lds.api.persistence.Fragment;
 import no.ssb.lds.api.persistence.FragmentType;
 
-import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.NavigableSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -32,7 +32,7 @@ class PathValueIndexIterator implements Consumer<Boolean> {
     final String namespace;
     final String entity;
     final String path;
-    final String value;
+    final byte[] value;
     final int limit;
 
     final AtomicInteger indexMatches = new AtomicInteger(0);
@@ -42,7 +42,7 @@ class PathValueIndexIterator implements Consumer<Boolean> {
 
     final AtomicInteger fragmentsPublished = new AtomicInteger(0);
 
-    PathValueIndexIterator(FoundationDBSubscription subscription, FoundationDBPersistence persistence, Tuple snapshot, OrderedKeyValueTransaction transaction, AsyncIterator<KeyValue> rangeIterator, Subspace primary, Subspace index, NavigableSet<Tuple> versions, String namespace, String entity, String path, String value, int limit) {
+    PathValueIndexIterator(FoundationDBSubscription subscription, FoundationDBPersistence persistence, Tuple snapshot, OrderedKeyValueTransaction transaction, AsyncIterator<KeyValue> rangeIterator, Subspace primary, Subspace index, NavigableSet<Tuple> versions, String namespace, String entity, String path, byte[] value, int limit) {
         this.subscription = subscription;
         this.persistence = persistence;
         this.snapshot = snapshot;
@@ -89,7 +89,7 @@ class PathValueIndexIterator implements Consumer<Boolean> {
             return;
         }
 
-        if (kv.getValue().length > 0 && !value.equals(new String(kv.getValue(), StandardCharsets.UTF_8))) {
+        if (kv.getValue().length > 0 && !Arrays.equals(value, kv.getValue())) {
             // false-positive match due to value truncation
             rangeIterator.onHasNext().thenAccept(this);
             return;

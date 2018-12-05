@@ -11,7 +11,7 @@ import java.util.Set;
 public class FoundationDBIntegrationTest extends BufferedPersistenceIntegration {
 
     public FoundationDBIntegrationTest() {
-        super("lds-provider-fdb-testng-ns");
+        super("lds-provider-fdb-testng-ns", 8 * 1024);
     }
 
     @BeforeClass
@@ -21,7 +21,7 @@ public class FoundationDBIntegrationTest extends BufferedPersistenceIntegration 
                 Map.of("foundationdb.directory.node-prefix.hex", "3A",
                         "foundationdb.directory.content-prefix.hex", "3B"),
                 Set.of("Person", "Address", "FunkyLongAddress"));
-        persistence = new DefaultBufferedPersistence(streaming);
+        persistence = new DefaultBufferedPersistence(streaming, 8 * 1024);
     }
 
     @AfterClass

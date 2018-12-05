@@ -26,10 +26,12 @@ import java.util.function.Consumer;
 
 public class FoundationDBPersistence implements Persistence {
 
+    // FoundationDB value size hard-limit is 100 KB.
+    // FoundationDB key size hard-limit is 10 KB.
+
     static final byte[] EMPTY_BYTE_ARRAY = new byte[0];
     static final ZoneId ZONE_ID_UTC = ZoneId.of("Etc/UTC");
-    static final int CHUNK_SIZE = 8 * 1024; // FoundationDB hard-limit is 100 KB.
-    static final int MAX_DESIRED_KEY_LENGTH = 256; // FoundationDB hard-limit is 10 KB.
+    static final int MAX_DESIRED_KEY_LENGTH = 256;
 
     static final String PRIMARY_INDEX = "Primary";
     static final String PATH_VALUE_INDEX = "PathValueIndex";
@@ -221,7 +223,7 @@ public class FoundationDBPersistence implements Persistence {
                 ArrayList<Integer> indices = new ArrayList<>();
                 String indexUnawarePath = Fragment.computeIndexUnawarePath(path, indices);
                 Tuple arrayIndices = Tuple.from(indices);
-                String truncatedValue = fragment.truncatedValue();
+                byte[] truncatedValue = fragment.truncatedValue();
                 Tuple valueIndexKey = Tuple.from(
                         truncatedValue,
                         id,
@@ -274,7 +276,7 @@ public class FoundationDBPersistence implements Persistence {
     }
 
     @Override
-    public Flow.Publisher<Fragment> find(Transaction transaction, ZonedDateTime snapshot, String namespace, String entity, String path, String value, String firstId, int limit) throws PersistenceException {
+    public Flow.Publisher<Fragment> find(Transaction transaction, ZonedDateTime snapshot, String namespace, String entity, String path, byte[] value, String firstId, int limit) throws PersistenceException {
         return new FindByPathAndValuePublisher(this, (OrderedKeyValueTransaction) transaction, toTuple(snapshot), namespace, entity, path, value, limit);
     }
 
