@@ -1,6 +1,7 @@
 package no.ssb.lds.core.persistence.foundationdb;
 
 import com.apple.foundationdb.KeyValue;
+import com.apple.foundationdb.Range;
 import com.apple.foundationdb.async.AsyncIterable;
 import com.apple.foundationdb.async.AsyncIterator;
 import com.apple.foundationdb.tuple.Tuple;
@@ -50,8 +51,9 @@ class FindByPathAndValuePublisher implements Flow.Publisher<Fragment> {
             String arrayIndexUnawarePath = Fragment.computeIndexUnawarePath(path, new ArrayList<>());
             persistence.getIndex(namespace, entity, arrayIndexUnawarePath).thenAccept(index -> {
                 byte[] truncatedValue = Fragment.truncate(value);
-                AsyncIterable<KeyValue> range = transaction.getRange(index.range(Tuple.from(truncatedValue)), PATH_VALUE_INDEX);
-                AsyncIterator<KeyValue> rangeIterator = range.iterator();
+                Range range = index.range(Tuple.from(truncatedValue));
+                AsyncIterable<KeyValue> rangeIterable = transaction.getRange(range, PATH_VALUE_INDEX);
+                AsyncIterator<KeyValue> rangeIterator = rangeIterable.iterator();
                 rangeIterator.onHasNext().thenAccept(new PathValueIndexIterator(subscription, persistence, snapshot, transaction, rangeIterator, primary, index, new TreeSet<>(), namespace, entity, path, value, limit));
             });
         });

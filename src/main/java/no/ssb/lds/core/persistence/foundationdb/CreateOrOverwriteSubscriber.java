@@ -126,7 +126,7 @@ public class CreateOrOverwriteSubscriber implements Flow.Subscriber<Fragment> {
 
                 // NOTE: With current implementation we do not need to clear the index. False-positive matches in the index
                 // are always followed up by a primary lookup. Clearing Index space is expensive as it requires a read to
-                // figure out whether there is anything to clear and then another read to get existing doument and then finally
+                // figure out whether there is anything to clear and then another read to get existing document and then finally
                 // clearing each document fragment independently from the existing document in the index space which cannot be
                 // done with a single range operation and therefore must be done using individual write operations per fragment.
 
@@ -160,6 +160,7 @@ public class CreateOrOverwriteSubscriber implements Flow.Subscriber<Fragment> {
                             Tuple.from(arrayIndices)
                     );
                     byte[] binaryValueIndexKey = index.pack(valueIndexKey);
+                    Range valueIndexRange = new Range(binaryValueIndexKey, binaryValueIndexKey);
                     if (binaryValueIndexKey.length > MAX_DESIRED_KEY_LENGTH) {
                         throw new IllegalArgumentException("Document fragment key is too big for index, at most " + MAX_DESIRED_KEY_LENGTH + " bytes allowed. Was: " + binaryValueIndexKey.length + " bytes.");
                     }

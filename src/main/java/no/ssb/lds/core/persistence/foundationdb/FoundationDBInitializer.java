@@ -7,10 +7,15 @@ import com.apple.foundationdb.directory.DirectoryLayer;
 import com.apple.foundationdb.subspace.Subspace;
 import no.ssb.lds.api.persistence.PersistenceInitializer;
 import no.ssb.lds.api.persistence.ProviderName;
+import no.ssb.lds.api.persistence.flattened.DefaultFlattenedPersistence;
+import no.ssb.lds.api.persistence.json.BufferedJsonPersistence;
+import no.ssb.lds.api.persistence.json.JsonPersistence;
 
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
+
+import static java.util.Optional.ofNullable;
 
 @ProviderName("foundationdb")
 public class FoundationDBInitializer implements PersistenceInitializer {
@@ -23,12 +28,13 @@ public class FoundationDBInitializer implements PersistenceInitializer {
     public Set<String> configurationKeys() {
         return Set.of(
                 "foundationdb.directory.node-prefix.hex",
-                "foundationdb.directory.content-prefix.hex"
+                "foundationdb.directory.content-prefix.hex",
+                "persistence.fragment.capacity"
         );
     }
 
     @Override
-    public FoundationDBPersistence initialize(String defaultNamespace, Map<String, String> configuration, Set<String> managedDomains) {
+    public JsonPersistence initialize(String defaultNamespace, Map<String, String> configuration, Set<String> managedDomains) {
         FDB fdb = FDB.selectAPIVersion(520);
         Database db = fdb.open();
         String nodePrefixHex = configuration.get("foundationdb.directory.node-prefix.hex");
@@ -39,11 +45,12 @@ public class FoundationDBInitializer implements PersistenceInitializer {
         if (contentPrefixHex == null || contentPrefixHex.isBlank()) {
             contentPrefixHex = "0x24";  // default
         }
+        int fragmentCapacityBytes = Integer.parseInt(ofNullable(configuration.get("persistence.fragment.capacity")).orElse("8192"));
         byte[] nodePrefix = hexToBytes(nodePrefixHex);
         byte[] contentPrefix = hexToBytes(contentPrefixHex);
         Directory directory = new DirectoryLayer(new Subspace(nodePrefix), new Subspace(contentPrefix));
         FoundationDBPersistence persistence = new FoundationDBPersistence(new FoundationDBTransactionFactory(db), new DefaultFoundationDBDirectory(db, directory));
-        return persistence;
+        return new BufferedJsonPersistence(new DefaultFlattenedPersistence(persistence, fragmentCapacityBytes), fragmentCapacityBytes);
     }
 
     static byte[] hexToBytes(String hexStr) {
