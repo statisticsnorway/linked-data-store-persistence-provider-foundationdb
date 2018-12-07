@@ -1,6 +1,6 @@
 package no.ssb.lds.core.persistence.foundationdb;
 
-import no.ssb.lds.api.persistence.Fragment;
+import no.ssb.lds.api.persistence.streaming.Fragment;
 
 import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicBoolean;

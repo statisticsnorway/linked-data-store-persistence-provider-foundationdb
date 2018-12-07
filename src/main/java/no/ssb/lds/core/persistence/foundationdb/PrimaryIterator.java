@@ -4,8 +4,8 @@ import com.apple.foundationdb.KeyValue;
 import com.apple.foundationdb.async.AsyncIterator;
 import com.apple.foundationdb.subspace.Subspace;
 import com.apple.foundationdb.tuple.Tuple;
-import no.ssb.lds.api.persistence.Fragment;
-import no.ssb.lds.api.persistence.FragmentType;
+import no.ssb.lds.api.persistence.streaming.Fragment;
+import no.ssb.lds.api.persistence.streaming.FragmentType;
 
 import java.util.Collections;
 import java.util.NavigableSet;

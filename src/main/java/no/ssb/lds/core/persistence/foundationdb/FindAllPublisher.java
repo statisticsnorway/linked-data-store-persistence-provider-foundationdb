@@ -3,7 +3,7 @@ package no.ssb.lds.core.persistence.foundationdb;
 import com.apple.foundationdb.KeyValue;
 import com.apple.foundationdb.async.AsyncIterator;
 import com.apple.foundationdb.tuple.Tuple;
-import no.ssb.lds.api.persistence.Fragment;
+import no.ssb.lds.api.persistence.streaming.Fragment;
 
 import java.util.concurrent.Flow;
 import java.util.concurrent.atomic.AtomicReference;

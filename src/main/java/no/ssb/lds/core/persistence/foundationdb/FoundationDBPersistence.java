@@ -8,13 +8,13 @@ import com.apple.foundationdb.async.AsyncIterable;
 import com.apple.foundationdb.async.AsyncIterator;
 import com.apple.foundationdb.subspace.Subspace;
 import com.apple.foundationdb.tuple.Tuple;
-import no.ssb.lds.api.persistence.Fragment;
-import no.ssb.lds.api.persistence.FragmentType;
-import no.ssb.lds.api.persistence.Persistence;
 import no.ssb.lds.api.persistence.PersistenceDeletePolicy;
 import no.ssb.lds.api.persistence.PersistenceException;
 import no.ssb.lds.api.persistence.Transaction;
 import no.ssb.lds.api.persistence.TransactionFactory;
+import no.ssb.lds.api.persistence.streaming.Fragment;
+import no.ssb.lds.api.persistence.streaming.FragmentType;
+import no.ssb.lds.api.persistence.streaming.Persistence;
 
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
