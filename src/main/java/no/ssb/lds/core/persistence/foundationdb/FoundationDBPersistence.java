@@ -141,7 +141,7 @@ public class FoundationDBPersistence implements Persistence {
     }
 
     @Override
-    public Flow.Publisher<Fragment> readVersions(Transaction transaction, ZonedDateTime snapshotFrom, ZonedDateTime snapshotTo, String namespace, String entity, String id, String firstId, int limit) throws PersistenceException {
+    public Flow.Publisher<Fragment> readVersions(Transaction transaction, ZonedDateTime snapshotFrom, ZonedDateTime snapshotTo, String namespace, String entity, String id, ZonedDateTime firstVersion, int limit) throws PersistenceException {
         return new ReadVersionsPublisher(this, (OrderedKeyValueTransaction) transaction, toTuple(snapshotFrom), toTuple(snapshotTo), namespace, entity, id, limit);
     }
 
