@@ -62,12 +62,6 @@
             <version>0.4</version>
         </dependency>
         <dependency>
-            <groupId>no.ssb.lds</groupId>
-            <artifactId>linked-data-store-persistence-provider-test</artifactId>
-            <version>0.2</version>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
             <groupId>org.foundationdb</groupId>
             <artifactId>fdb-java</artifactId>
             <version>5.2.5</version>
