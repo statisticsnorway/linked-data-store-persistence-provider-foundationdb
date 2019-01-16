@@ -13,6 +13,7 @@ import no.ssb.lds.api.persistence.json.JsonPersistence;
 
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static java.util.Optional.ofNullable;
@@ -55,12 +56,14 @@ public class FoundationDBInitializer implements PersistenceInitializer {
 
     static byte[] hexToBytes(String hexStr) {
         Pattern hexBytesPattern = Pattern.compile("(?:0[xX])?((?:[0-9A-Fa-f]{2})*)");
-        if (!hexBytesPattern.matcher(hexStr).matches()) {
+        Matcher matcher = hexBytesPattern.matcher(hexStr);
+        if (!matcher.matches()) {
             throw new IllegalArgumentException("Not a hex string: \"" + hexStr + "\"");
         }
-        byte[] buf = new byte[hexStr.length() / 2];
-        for (int i = 0; i < hexStr.length(); i += 2) {
-            String str = hexStr.substring(i, i + 2);
+        String hex = matcher.group(1);
+        byte[] buf = new byte[hex.length() / 2];
+        for (int i = 0; i < hex.length(); i += 2) {
+            String str = hex.substring(i, i + 2);
             buf[i / 2] = Byte.parseByte(str, 16);
         }
 
