@@ -25,9 +25,16 @@ class FindByPathAndValuePublisher implements Flow.Publisher<Fragment> {
     final byte[] value;
     final int limit;
 
-    final AtomicReference<Flow.Subscriber<? super Fragment>> subscriberRef = new AtomicReference<>();
+    final AtomicReference<Throwable> failedPublisherThrowable = new AtomicReference<>();
 
     FindByPathAndValuePublisher(FoundationDBPersistence persistence, OrderedKeyValueTransaction transaction, Tuple snapshot, String namespace, String entity, String path, byte[] value, int limit) {
+        try {
+            if (transaction == null) {
+                throw new IllegalArgumentException("transaction cannot be null");
+            }
+        } catch (Throwable t) {
+            failedPublisherThrowable.set(t);
+        }
         this.persistence = persistence;
         this.transaction = transaction;
         this.snapshot = snapshot;
@@ -40,13 +47,15 @@ class FindByPathAndValuePublisher implements Flow.Publisher<Fragment> {
 
     @Override
     public void subscribe(Flow.Subscriber<? super Fragment> subscriber) {
-        subscriberRef.set(subscriber);
         FoundationDBSubscription subscription = new FoundationDBSubscription(subscriber);
-        subscription.registerFirstRequest(n -> doReadVersions(subscription, n));
-        subscriber.onSubscribe(subscription);
+        subscription.registerFirstRequest(() -> doFindByPathAndValue(subscription));
+        subscription.onSubscribe();
+        if (failedPublisherThrowable.get() != null) {
+            subscriber.onError(failedPublisherThrowable.get());
+        }
     }
 
-    void doReadVersions(FoundationDBSubscription subscription, long n) {
+    void doFindByPathAndValue(FoundationDBSubscription subscription) {
         persistence.getPrimary(namespace, entity).thenAccept(primary -> {
             String arrayIndexUnawarePath = Fragment.computeIndexUnawarePath(path, new ArrayList<>());
             persistence.getIndex(namespace, entity, arrayIndexUnawarePath).thenAccept(index -> {
@@ -54,7 +63,8 @@ class FindByPathAndValuePublisher implements Flow.Publisher<Fragment> {
                 Range range = index.range(Tuple.from(truncatedValue));
                 AsyncIterable<KeyValue> rangeIterable = transaction.getRange(range, PATH_VALUE_INDEX);
                 AsyncIterator<KeyValue> rangeIterator = rangeIterable.iterator();
-                rangeIterator.onHasNext().thenAccept(new PathValueIndexIterator(subscription, persistence, snapshot, transaction, rangeIterator, primary, index, new TreeSet<>(), namespace, entity, path, value, limit));
+                PathValueIndexIterator pathValueIndexIterator = new PathValueIndexIterator(subscription, persistence, snapshot, transaction, rangeIterator, primary, index, new TreeSet<>(), namespace, entity, path, value, limit);
+                rangeIterator.onHasNext().thenAccept(pathValueIndexIterator);
             });
         });
     }

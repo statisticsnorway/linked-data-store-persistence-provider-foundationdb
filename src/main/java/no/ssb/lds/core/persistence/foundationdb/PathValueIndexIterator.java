@@ -5,7 +5,6 @@ import com.apple.foundationdb.async.AsyncIterable;
 import com.apple.foundationdb.async.AsyncIterator;
 import com.apple.foundationdb.subspace.Subspace;
 import com.apple.foundationdb.tuple.Tuple;
-import no.ssb.lds.api.persistence.streaming.Fragment;
 import no.ssb.lds.api.persistence.streaming.FragmentType;
 
 import java.util.Arrays;
@@ -56,7 +55,7 @@ class PathValueIndexIterator implements Consumer<Boolean> {
         this.path = path;
         this.value = value;
         this.limit = limit;
-        subscription.registerCancel(v -> cancel.set(true));
+        subscription.registerCancel(() -> cancel.set(true));
     }
 
     @Override
@@ -77,7 +76,6 @@ class PathValueIndexIterator implements Consumer<Boolean> {
         if (cancel.get()) {
             // honor external cancel signal
             rangeIterator.cancel();
-            subscription.onComplete();
             return;
         }
 
@@ -85,7 +83,6 @@ class PathValueIndexIterator implements Consumer<Boolean> {
 
         if (indexMatches.get() >= limit) {
             rangeIterator.cancel();
-            subscription.onComplete();
             return;
         }
 
@@ -119,6 +116,7 @@ class PathValueIndexIterator implements Consumer<Boolean> {
         }
         versionsId.set(dbId);
         versions.add(matchedVersion);
+
         rangeIterator.onHasNext().thenAccept(this);
     }
 
@@ -135,7 +133,7 @@ class PathValueIndexIterator implements Consumer<Boolean> {
                 persistence.transactionFactory().runAsyncInIsolatedTransaction(tx -> {
                     ((OrderedKeyValueTransaction) tx).clear(aMatchingFragmentKv.getKey(), PATH_VALUE_INDEX);
                     return null;
-                }).exceptionally(throwable -> {
+                }, false).exceptionally(throwable -> {
                     throwable.printStackTrace();
                     return null;
                 });
@@ -148,7 +146,7 @@ class PathValueIndexIterator implements Consumer<Boolean> {
             AsyncIterable<KeyValue> range = transaction.getRange(primary.range(Tuple.from(id, version)), PRIMARY_INDEX);
             AsyncIterator<KeyValue> iterator = range.iterator();
             PrimaryIterator primaryIterator = new PrimaryIterator(subscription, snapshot, transaction, namespace, entity, null, primary, iterator, limit);
-            iterator.onHasNext().thenAccept(primaryIterator);
+            subscription.queuePublicationRequest(() -> iterator.onHasNext().thenAccept(primaryIterator));
             return primaryIterator.doneSignal;
         });
     }
@@ -157,19 +155,9 @@ class PathValueIndexIterator implements Consumer<Boolean> {
         for (Tuple version : versions) {
             if (version.compareTo(snapshot) >= 0) {
                 indexMatches.incrementAndGet();
-                onIndexMatch(versionsId.get(), version).thenAccept(v -> {
-                    signalComplete();
-                });
+                onIndexMatch(versionsId.get(), version).thenAccept(v -> subscription.onComplete());
                 return;
             }
-        }
-        signalComplete();
-    }
-
-    private void signalComplete() {
-        if (fragmentsPublished.get() == 0) {
-            // no elements in iterator
-            subscription.onNext(Fragment.DONE_NOT_LIMITED);
         }
         subscription.onComplete();
     }

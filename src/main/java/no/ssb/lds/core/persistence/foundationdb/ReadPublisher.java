@@ -24,11 +24,18 @@ class ReadPublisher implements Flow.Publisher<Fragment> {
     final String namespace;
     final String entity;
     final String id;
+    final AtomicReference<Throwable> failedPublisherThrowable = new AtomicReference<>();
 
-    final AtomicReference<Flow.Subscriber<? super Fragment>> subscriberRef = new AtomicReference<>();
     final AtomicReference<Subspace> subspaceRef = new AtomicReference<>();
 
     ReadPublisher(FoundationDBPersistence persistence, OrderedKeyValueTransaction transaction, Tuple snapshot, String namespace, String entity, String id) {
+        try {
+            if (transaction == null) {
+                throw new IllegalArgumentException("transaction cannot be null");
+            }
+        } catch (Throwable t) {
+            failedPublisherThrowable.set(t);
+        }
         this.persistence = persistence;
         this.transaction = transaction;
         this.snapshot = snapshot;
@@ -39,19 +46,21 @@ class ReadPublisher implements Flow.Publisher<Fragment> {
 
     @Override
     public void subscribe(Flow.Subscriber<? super Fragment> subscriber) {
-        subscriberRef.set(subscriber);
         FoundationDBSubscription subscription = new FoundationDBSubscription(subscriber);
-        subscription.registerFirstRequest(n -> doRead(subscription, n));
-        subscriber.onSubscribe(subscription);
+        subscription.registerFirstRequest(() -> doRead(subscription));
+        subscription.onSubscribe();
+        if (failedPublisherThrowable.get() != null) {
+            subscriber.onError(failedPublisherThrowable.get());
+        }
     }
 
-    void doRead(FoundationDBSubscription subscription, long n) {
+    void doRead(FoundationDBSubscription subscription) {
         try {
             Subspace primary = subspaceRef.get();
             if (primary == null) {
                 persistence.getPrimary(namespace, entity).thenAccept(p -> {
                     subspaceRef.set(p);
-                    doRead(subscription, n);
+                    doRead(subscription);
                 }).exceptionally(t -> {
                     subscription.onError(t);
                     return null;
@@ -63,23 +72,19 @@ class ReadPublisher implements Flow.Publisher<Fragment> {
              * Determine the correct version timestamp of the document to use. Will perform a database access and fetch at most one key-value
              */
             findAnyOneMatchingFragmentInPrimary(transaction, primary, id, snapshot).thenAccept(aMatchingKeyValue -> {
-                Flow.Subscriber<? super Fragment> subscriber = subscriberRef.get();
-
                 if (aMatchingKeyValue == null) {
                     // document not found
-                    subscriber.onNext(Fragment.DONE_NOT_LIMITED);
-                    subscriber.onComplete();
+                    subscription.onComplete();
                 }
                 if (!primary.contains(aMatchingKeyValue.getKey())) {
-                    subscriber.onNext(Fragment.DONE_NOT_LIMITED);
-                    subscriber.onComplete();
+                    subscription.onComplete();
                 }
                 Tuple key = primary.unpack(aMatchingKeyValue.getKey());
                 Tuple version = key.getNestedTuple(1);
                 FragmentType fragmentType = FragmentType.fromTypeCode(key.getBytes(3)[0]);
                 if (FragmentType.DELETED.equals(fragmentType)) {
-                    subscriber.onNext(new Fragment(namespace, entity, id, toTimestamp(version), "", FragmentType.DELETED, 0, EMPTY_BYTE_ARRAY));
-                    subscriber.onComplete();
+                    subscription.onNext(new Fragment(namespace, entity, id, toTimestamp(version), "", FragmentType.DELETED, 0, EMPTY_BYTE_ARRAY));
+                    subscription.onComplete();
                 }
 
                 /*
@@ -99,11 +104,9 @@ class ReadPublisher implements Flow.Publisher<Fragment> {
         AsyncIterable<KeyValue> range = transaction.getRange(primary.range(Tuple.from(id, version)), PRIMARY_INDEX);
         AsyncIterator<KeyValue> iterator = range.iterator();
         PrimaryIterator primaryIterator = new PrimaryIterator(subscription, snapshot, transaction, namespace, entity, null, primary, iterator, limit);
-        iterator.onHasNext().thenAccept(primaryIterator);
+        subscription.queuePublicationRequest(() -> iterator.onHasNext().thenAccept(primaryIterator));
         primaryIterator.doneSignal
-                .thenAccept(fragmentsPublished -> {
-                    subscription.onComplete();
-                })
+                .thenAccept(fragmentsPublished -> subscription.onComplete())
                 .exceptionally(t -> {
                     subscription.onError(t);
                     return null;

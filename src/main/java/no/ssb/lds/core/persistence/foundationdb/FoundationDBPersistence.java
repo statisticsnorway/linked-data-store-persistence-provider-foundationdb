@@ -33,8 +33,8 @@ public class FoundationDBPersistence implements Persistence {
     static final ZoneId ZONE_ID_UTC = ZoneId.of("Etc/UTC");
     static final int MAX_DESIRED_KEY_LENGTH = 256;
 
-    static final String PRIMARY_INDEX = "Primary";
-    static final String PATH_VALUE_INDEX = "PathValueIndex";
+    public static final String PRIMARY_INDEX = "Primary";
+    public static final String PATH_VALUE_INDEX = "PathValueIndex";
 
     final TransactionFactory transactionFactory;
     final FoundationDBDirectory foundationDBDirectory;
@@ -52,7 +52,7 @@ public class FoundationDBPersistence implements Persistence {
      * @param entity
      * @return
      */
-    CompletableFuture<? extends Subspace> getPrimary(String namespace, String entity) {
+    public CompletableFuture<? extends Subspace> getPrimary(String namespace, String entity) {
         return foundationDBDirectory.createOrOpen(Tuple.from(namespace, PRIMARY_INDEX, entity));
     }
 
@@ -65,7 +65,7 @@ public class FoundationDBPersistence implements Persistence {
      * @param path
      * @return
      */
-    CompletableFuture<? extends Subspace> getIndex(String namespace, String entity, String path) {
+    public CompletableFuture<? extends Subspace> getIndex(String namespace, String entity, String path) {
         return foundationDBDirectory.createOrOpen(Tuple.from(namespace, PATH_VALUE_INDEX, entity, path));
     }
 
@@ -105,8 +105,7 @@ public class FoundationDBPersistence implements Persistence {
          * The range specified is guaranteed to never return more than 1 result. The returned KeyValue list will be one of:
          *   (1) Last fragment of matching resource when resource exists and client-timestamp is greater than or equal to resource timestamp
          *   (2) Last fragment of an unrelated resource when resource does not exist for the specified timestamp
-         *   (3) KeyValue of another key-space than PRIMARYDBSubscription subscription, Tuple snapshot, ReadTransaction transaction, FoundationDBStatistics statistics, String namespace, String entity, String id, Tuple version, int limit) {
-        CompletableFuture<FragmentResult> result =
+         *   (3) KeyValue of another key-space than PRIMARY
          *   (4) Empty when database is empty (or an unlikely corner-case when asking for a resource at beginning of key-space)
          */
 
@@ -285,7 +284,7 @@ public class FoundationDBPersistence implements Persistence {
         transactionFactory.close();
     }
 
-    static Tuple toTuple(ZonedDateTime timestamp) {
+    public static Tuple toTuple(ZonedDateTime timestamp) {
         return Tuple.from(
                 -timestamp.getYear(),
                 -timestamp.getMonth().getValue(),
@@ -297,7 +296,7 @@ public class FoundationDBPersistence implements Persistence {
         );
     }
 
-    static ZonedDateTime toTimestamp(Tuple timestampTuple) {
+    public static ZonedDateTime toTimestamp(Tuple timestampTuple) {
         return ZonedDateTime.of(
                 (int) -timestampTuple.getLong(0),
                 (int) -timestampTuple.getLong(1),

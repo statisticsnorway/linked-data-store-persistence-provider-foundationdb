@@ -25,10 +25,18 @@ class ReadVersionsPublisher implements Flow.Publisher<Fragment> {
     final String id;
     final int limit;
 
-    final AtomicReference<Flow.Subscriber<? super Fragment>> subscriberRef = new AtomicReference<>();
+    final AtomicReference<Throwable> failedPublisherThrowable = new AtomicReference<>();
+
     final AtomicReference<Subspace> subspaceRef = new AtomicReference<>();
 
     ReadVersionsPublisher(FoundationDBPersistence persistence, OrderedKeyValueTransaction transaction, Tuple snapshotFrom, Tuple snapshotTo, String namespace, String entity, String id, int limit) {
+        try {
+            if (transaction == null) {
+                throw new IllegalArgumentException("transaction cannot be null");
+            }
+        } catch (Throwable t) {
+            failedPublisherThrowable.set(t);
+        }
         this.persistence = persistence;
         this.transaction = transaction;
         this.snapshotFrom = snapshotFrom;
@@ -41,18 +49,20 @@ class ReadVersionsPublisher implements Flow.Publisher<Fragment> {
 
     @Override
     public void subscribe(Flow.Subscriber<? super Fragment> subscriber) {
-        subscriberRef.set(subscriber);
         FoundationDBSubscription subscription = new FoundationDBSubscription(subscriber);
-        subscription.registerFirstRequest(n -> doReadVersions(subscription, n));
-        subscriber.onSubscribe(subscription);
+        subscription.registerFirstRequest(() -> doReadVersions(subscription));
+        subscription.onSubscribe();
+        if (failedPublisherThrowable.get() != null) {
+            subscriber.onError(failedPublisherThrowable.get());
+        }
     }
 
-    void doReadVersions(FoundationDBSubscription subscription, long n) {
+    void doReadVersions(FoundationDBSubscription subscription) {
         Subspace primary = subspaceRef.get();
         if (primary == null) {
             persistence.getPrimary(namespace, entity).thenAccept(p -> {
                 subspaceRef.set(p);
-                doReadVersions(subscription, n);
+                doReadVersions(subscription);
             });
             return;
         }
@@ -61,19 +71,15 @@ class ReadVersionsPublisher implements Flow.Publisher<Fragment> {
          * Determine the correct version timestamp of the document to use. Will perform a database access and fetch at most one key-value
          */
         findAnyOneMatchingFragmentInPrimary(transaction, primary, id, snapshotFrom).thenAccept(aMatchingKeyValue -> {
-            Flow.Subscriber<? super Fragment> subscriber = subscriberRef.get();
 
-            if (aMatchingKeyValue == null) {
-                // document not found
-                subscriber.onNext(Fragment.DONE_NOT_LIMITED);
-                subscriber.onComplete();
+            Tuple lowerBound;
+            if (aMatchingKeyValue == null || !primary.contains(aMatchingKeyValue.getKey())) {
+                // no versions older or equals to snapshotFrom exists, use snapshotFrom as lower bound
+                lowerBound = snapshotFrom;
+            } else {
+                Tuple key = primary.unpack(aMatchingKeyValue.getKey());
+                lowerBound = tickBackward(key.getNestedTuple(1));
             }
-            if (!primary.contains(aMatchingKeyValue.getKey())) {
-                subscriber.onNext(Fragment.DONE_NOT_LIMITED);
-                subscriber.onComplete();
-            }
-            Tuple key = primary.unpack(aMatchingKeyValue.getKey());
-            Tuple firstMatchingVersion = key.getNestedTuple(1);
 
             /*
              * Get document with given version.
@@ -83,12 +89,12 @@ class ReadVersionsPublisher implements Flow.Publisher<Fragment> {
              */
             AsyncIterator<KeyValue> iterator = transaction.getRange(
                     KeySelector.firstGreaterOrEqual(primary.pack(Tuple.from(id, tickBackward(snapshotTo)))),
-                    KeySelector.firstGreaterOrEqual(primary.pack(Tuple.from(id, tickBackward(firstMatchingVersion)))),
+                    KeySelector.firstGreaterOrEqual(primary.pack(Tuple.from(id, lowerBound))),
                     PRIMARY_INDEX
             ).iterator();
 
             PrimaryIterator primaryIterator = new PrimaryIterator(subscription, null, transaction, namespace, entity, null, primary, iterator, limit);
-            iterator.onHasNext().thenAccept(primaryIterator);
+            subscription.queuePublicationRequest(() -> iterator.onHasNext().thenAccept(primaryIterator));
             primaryIterator.doneSignal
                     .thenAccept(fragmentsPublished -> {
                         subscription.onComplete();

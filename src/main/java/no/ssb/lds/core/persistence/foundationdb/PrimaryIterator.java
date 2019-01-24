@@ -9,10 +9,8 @@ import no.ssb.lds.api.persistence.streaming.FragmentType;
 
 import java.util.Collections;
 import java.util.NavigableSet;
-import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentSkipListSet;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -35,9 +33,6 @@ class PrimaryIterator implements Consumer<Boolean> {
 
     final AtomicBoolean cancel = new AtomicBoolean(false);
 
-    final Set<String> processingThreads = new ConcurrentSkipListSet<>();
-
-    final AtomicReference<Fragment> fragmentToPublish = new AtomicReference<>();
     final AtomicInteger fragmentsPublished = new AtomicInteger(0);
 
     final AtomicReference<String> fragmentsId = new AtomicReference<>();
@@ -60,44 +55,33 @@ class PrimaryIterator implements Consumer<Boolean> {
             this.remainingIds = Collections.synchronizedNavigableSet(new TreeSet<>(ids));
         }
         this.limit = limit;
-        subscription.registerCancel(v -> cancel.set(true));
-        subscription.registerOnBudgetPositive(n -> applyBackpressure(n));
-        checkAndRecordProcessingThread();
+        subscription.registerCancel(() -> cancel.set(true));
+        subscription.registerOnBudgetPositive(() -> applyBackpressure());
     }
 
-    private void checkAndRecordProcessingThread() {
-        String name = Thread.currentThread().getName();
-        if (!processingThreads.contains(name)) {
-            processingThreads.add(name);
-            // System.out.format("%s :: %s :: accept()%n", Thread.currentThread().getName(), this.toString());
-        }
-    }
-
-    void applyBackpressure(long n) {
-        // budget was exhausted
-        iterator.onHasNext().thenAccept(this);
+    void applyBackpressure() {
+        subscription.queuePublicationRequest(() -> iterator.onHasNext().thenAccept(this));
     }
 
     @Override
     public void accept(Boolean hasNext) {
-        // TODO avoid stack-overflow due to recursion depth increasing with number of fragments
         try {
-            checkAndRecordProcessingThread();
             if (hasNext) {
                 onAsyncIteratorHasNext();
             } else {
                 onAsyncIteratorHasNoMore();
             }
         } catch (Throwable t) {
-            iterator.cancel();
-            doneSignal.completeExceptionally(t);
+            try {
+                iterator.cancel();
+            } finally {
+                doneSignal.completeExceptionally(t);
+            }
         }
     }
 
     void onAsyncIteratorHasNext() {
         KeyValue kv = iterator.next();
-
-        returnStolenBudget();
 
         if (cancel.get()) {
             // honor external cancel signal
@@ -165,38 +149,19 @@ class PrimaryIterator implements Consumer<Boolean> {
         if (fragmentsPublished.get() >= limit) {
             // reached limit and there are more matching fragments.
             subscription.onNext(new Fragment(true, Fragment.LIMITED_CODE, namespace, entity, dbId, toTimestamp(version), path, fragmentType, offset, EMPTY_BYTE_ARRAY));
+            fragmentsPublished.incrementAndGet();
             signalComplete();
             return;
         }
 
-        if (!fragmentToPublish.compareAndSet(null, new Fragment(namespace, entity, dbId, toTimestamp(version), path, fragmentType, offset, kv.getValue()))) {
-            throw new IllegalStateException("Previous fragment was not published!");
-        }
+        Fragment fragment = new Fragment(namespace, entity, dbId, toTimestamp(version), path, fragmentType, offset, kv.getValue());
+        subscription.onNext(fragment);
+        fragmentsPublished.incrementAndGet();
 
-        if (subscription.budget.getAndDecrement() <= 0) {
-            // budget stolen, will be returned when more back-pressure is applied.
-            return;
-        }
-
-        publishFragment();
-
-        iterator.onHasNext().thenAccept(this);
-    }
-
-    private void publishFragment() {
-        Fragment fragment = fragmentToPublish.getAndSet(null);
-        if (fragment != null) {
-            subscription.onNext(fragment);
-            fragmentsPublished.incrementAndGet();
-        }
-    }
-
-    void returnStolenBudget() {
-        publishFragment();
+        subscription.queuePublicationRequest(() -> iterator.onHasNext().thenAccept(this));
     }
 
     void onAsyncIteratorHasNoMore() {
-        returnStolenBudget();
         signalComplete();
     }
 

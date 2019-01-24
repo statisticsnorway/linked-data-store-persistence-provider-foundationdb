@@ -20,10 +20,17 @@ class ReadAllVersionsPublisher implements Flow.Publisher<Fragment> {
     final String id;
     final int limit;
 
-    final AtomicReference<Flow.Subscriber<? super Fragment>> subscriberRef = new AtomicReference<>();
+    final AtomicReference<Throwable> failedPublisherThrowable = new AtomicReference<>();
     final AtomicReference<Subspace> subspaceRef = new AtomicReference<>();
 
     ReadAllVersionsPublisher(FoundationDBPersistence persistence, OrderedKeyValueTransaction transaction, String namespace, String entity, String id, int limit) {
+        try {
+            if (transaction == null) {
+                throw new IllegalArgumentException("transaction cannot be null");
+            }
+        } catch (Throwable t) {
+            failedPublisherThrowable.set(t);
+        }
         this.persistence = persistence;
         this.transaction = transaction;
         this.namespace = namespace;
@@ -34,18 +41,20 @@ class ReadAllVersionsPublisher implements Flow.Publisher<Fragment> {
 
     @Override
     public void subscribe(Flow.Subscriber<? super Fragment> subscriber) {
-        subscriberRef.set(subscriber);
         FoundationDBSubscription subscription = new FoundationDBSubscription(subscriber);
-        subscription.registerFirstRequest(n -> doReadVersions(subscription, n));
-        subscriber.onSubscribe(subscription);
+        subscription.registerFirstRequest(() -> doReadVersions(subscription));
+        subscription.onSubscribe();
+        if (failedPublisherThrowable.get() != null) {
+            subscriber.onError(failedPublisherThrowable.get());
+        }
     }
 
-    void doReadVersions(FoundationDBSubscription subscription, long n) {
+    void doReadVersions(FoundationDBSubscription subscription) {
         Subspace primary = subspaceRef.get();
         if (primary == null) {
             persistence.getPrimary(namespace, entity).thenAccept(p -> {
                 subspaceRef.set(p);
-                doReadVersions(subscription, n);
+                doReadVersions(subscription);
             });
             return;
         }
@@ -55,7 +64,7 @@ class ReadAllVersionsPublisher implements Flow.Publisher<Fragment> {
          */
         AsyncIterator<KeyValue> iterator = transaction.getRange(primary.range(Tuple.from(id)), PRIMARY_INDEX).iterator();
         PrimaryIterator primaryIterator = new PrimaryIterator(subscription, null, transaction, namespace, entity, null, primary, iterator, limit);
-        iterator.onHasNext().thenAccept(primaryIterator);
+        subscription.queuePublicationRequest(() -> iterator.onHasNext().thenAccept(primaryIterator));
         primaryIterator.doneSignal
                 .thenAccept(fragmentsPublished -> {
                     subscription.onComplete();

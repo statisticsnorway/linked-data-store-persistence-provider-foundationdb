@@ -19,9 +19,16 @@ class FindAllPublisher implements Flow.Publisher<Fragment> {
     final String entity;
     final int limit;
 
-    final AtomicReference<Flow.Subscriber<? super Fragment>> subscriberRef = new AtomicReference<>();
+    final AtomicReference<Throwable> failedPublisherThrowable = new AtomicReference<>();
 
     FindAllPublisher(FoundationDBPersistence persistence, OrderedKeyValueTransaction transaction, Tuple snapshot, String namespace, String entity, int limit) {
+        try {
+            if (transaction == null) {
+                throw new IllegalArgumentException("transaction cannot be null");
+            }
+        } catch (Throwable t) {
+            failedPublisherThrowable.set(t);
+        }
         this.persistence = persistence;
         this.transaction = transaction;
         this.snapshot = snapshot;
@@ -32,17 +39,19 @@ class FindAllPublisher implements Flow.Publisher<Fragment> {
 
     @Override
     public void subscribe(Flow.Subscriber<? super Fragment> subscriber) {
-        subscriberRef.set(subscriber);
         FoundationDBSubscription subscription = new FoundationDBSubscription(subscriber);
-        subscription.registerFirstRequest(n -> doReadVersions(subscription, n));
-        subscriber.onSubscribe(subscription);
+        subscription.registerFirstRequest(() -> doReadVersions(subscription));
+        subscription.onSubscribe();
+        if (failedPublisherThrowable.get() != null) {
+            subscriber.onError(failedPublisherThrowable.get());
+        }
     }
 
-    void doReadVersions(FoundationDBSubscription subscription, long n) {
+    void doReadVersions(FoundationDBSubscription subscription) {
         persistence.getPrimary(namespace, entity).thenAccept(primary -> {
             AsyncIterator<KeyValue> iterator = transaction.getRange(primary.range(Tuple.from()), PRIMARY_INDEX).iterator();
             PrimaryIterator primaryIterator = new PrimaryIterator(subscription, snapshot, transaction, namespace, entity, null, primary, iterator, limit);
-            iterator.onHasNext().thenAccept(primaryIterator);
+            subscription.queuePublicationRequest(() -> iterator.onHasNext().thenAccept(primaryIterator));
             primaryIterator.doneSignal
                     .thenAccept(fragmentsPublished -> {
                         subscription.onComplete();
