@@ -7,12 +7,8 @@ import com.apple.foundationdb.directory.DirectoryLayer;
 import com.apple.foundationdb.subspace.Subspace;
 import no.ssb.lds.api.persistence.PersistenceInitializer;
 import no.ssb.lds.api.persistence.ProviderName;
-import no.ssb.lds.api.persistence.flattened.DefaultFlattenedPersistence;
-import no.ssb.lds.api.persistence.json.BufferedJsonPersistence;
-import no.ssb.lds.api.persistence.json.JsonPersistence;
 import no.ssb.lds.api.persistence.reactivex.RxJsonPersistence;
 import no.ssb.lds.api.persistence.reactivex.RxJsonPersistenceBridge;
-import no.ssb.lds.api.persistence.reactivex.RxPersistenceBridge;
 
 import java.util.Map;
 import java.util.Set;
@@ -53,8 +49,8 @@ public class FoundationDBInitializer implements PersistenceInitializer {
         byte[] nodePrefix = hexToBytes(nodePrefixHex);
         byte[] contentPrefix = hexToBytes(contentPrefixHex);
         Directory directory = new DirectoryLayer(new Subspace(nodePrefix), new Subspace(contentPrefix));
-        FoundationDBPersistence persistence = new FoundationDBPersistence(new FoundationDBTransactionFactory(db), new DefaultFoundationDBDirectory(db, directory));
-        return new RxJsonPersistenceBridge(new RxPersistenceBridge(persistence), fragmentCapacityBytes);
+        FoundationDBRxPersistence persistence = new FoundationDBRxPersistence(new FoundationDBTransactionFactory(db), new DefaultFoundationDBDirectory(db, directory));
+        return new RxJsonPersistenceBridge(persistence, fragmentCapacityBytes);
     }
 
     static byte[] hexToBytes(String hexStr) {
