@@ -45,14 +45,14 @@ public class FoundationDBReadTransaction implements OrderedKeyValueTransaction {
         throw new UnsupportedOperationException("clear key not allowed in read-only transaction");
     }
 
-    public AsyncIterable<KeyValue> getRange(Range range, String index) {
-        AsyncIterable<KeyValue> iterable = fdbReadTransaction.getRange(range);
+    public AsyncIterable<KeyValue> getRange(Range range, String index, int limit) {
+        AsyncIterable<KeyValue> iterable = fdbReadTransaction.getRange(range, limit);
         statistics.getRange(index);
         return iterable;
     }
 
-    public AsyncIterable<KeyValue> getRange(KeySelector begin, KeySelector end, String index) {
-        AsyncIterable<KeyValue> iterable = fdbReadTransaction.getRange(begin, end);
+    public AsyncIterable<KeyValue> getRange(KeySelector begin, KeySelector end, String index, int limit) {
+        AsyncIterable<KeyValue> iterable = fdbReadTransaction.getRange(begin, end, limit);
         statistics.getRange(index);
         return iterable;
     }

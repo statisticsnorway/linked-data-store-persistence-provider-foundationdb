@@ -7,9 +7,8 @@ import com.apple.foundationdb.directory.DirectoryLayer;
 import com.apple.foundationdb.subspace.Subspace;
 import no.ssb.lds.api.persistence.PersistenceInitializer;
 import no.ssb.lds.api.persistence.ProviderName;
-import no.ssb.lds.api.persistence.flattened.DefaultFlattenedPersistence;
-import no.ssb.lds.api.persistence.json.BufferedJsonPersistence;
-import no.ssb.lds.api.persistence.json.JsonPersistence;
+import no.ssb.lds.api.persistence.reactivex.RxJsonPersistence;
+import no.ssb.lds.api.persistence.reactivex.RxJsonPersistenceBridge;
 
 import java.util.Map;
 import java.util.Set;
@@ -35,7 +34,7 @@ public class FoundationDBInitializer implements PersistenceInitializer {
     }
 
     @Override
-    public JsonPersistence initialize(String defaultNamespace, Map<String, String> configuration, Set<String> managedDomains) {
+    public RxJsonPersistence initialize(String defaultNamespace, Map<String, String> configuration, Set<String> managedDomains) {
         FDB fdb = FDB.selectAPIVersion(520);
         Database db = fdb.open();
         String nodePrefixHex = configuration.get("foundationdb.directory.node-prefix.hex");
@@ -50,8 +49,8 @@ public class FoundationDBInitializer implements PersistenceInitializer {
         byte[] nodePrefix = hexToBytes(nodePrefixHex);
         byte[] contentPrefix = hexToBytes(contentPrefixHex);
         Directory directory = new DirectoryLayer(new Subspace(nodePrefix), new Subspace(contentPrefix));
-        FoundationDBPersistence persistence = new FoundationDBPersistence(new FoundationDBTransactionFactory(db), new DefaultFoundationDBDirectory(db, directory));
-        return new BufferedJsonPersistence(new DefaultFlattenedPersistence(persistence, fragmentCapacityBytes), fragmentCapacityBytes);
+        FoundationDBRxPersistence persistence = new FoundationDBRxPersistence(new FoundationDBTransactionFactory(db), new DefaultFoundationDBDirectory(db, directory));
+        return new RxJsonPersistenceBridge(persistence, fragmentCapacityBytes);
     }
 
     static byte[] hexToBytes(String hexStr) {

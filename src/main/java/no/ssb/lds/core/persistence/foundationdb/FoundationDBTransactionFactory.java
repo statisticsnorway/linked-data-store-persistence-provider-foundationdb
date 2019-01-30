@@ -17,11 +17,13 @@ public class FoundationDBTransactionFactory implements TransactionFactory {
 
     @Override
     public <T> CompletableFuture<T> runAsyncInIsolatedTransaction(Function<? super Transaction, ? extends T> retryable, boolean readOnly) {
+        CompletableFuture<T> future = new CompletableFuture<>();
         if (readOnly) {
-            return db.readAsync(tx -> CompletableFuture.completedFuture(retryable.apply(new FoundationDBReadTransaction(tx))));
+            db.readAsync(tx -> CompletableFuture.completedFuture(retryable.apply(new FoundationDBReadTransaction(tx))).thenAccept(t -> future.complete(t)));
         } else {
-            return db.runAsync(tx -> CompletableFuture.completedFuture(retryable.apply(new FoundationDBTransaction(tx))));
+            db.runAsync(tx -> CompletableFuture.completedFuture(retryable.apply(new FoundationDBTransaction(tx))).thenAccept(t -> future.complete(t)));
         }
+        return future;
     }
 
     @Override

@@ -16,9 +16,9 @@ public interface OrderedKeyValueTransaction extends Transaction {
 
     void clear(byte[] key, String index);
 
-    AsyncIterable<KeyValue> getRange(Range range, String index);
+    AsyncIterable<KeyValue> getRange(Range range, String index, int limit);
 
-    AsyncIterable<KeyValue> getRange(KeySelector begin, KeySelector end, String index);
+    AsyncIterable<KeyValue> getRange(KeySelector begin, KeySelector end, String index, int limit);
 
     AsyncIterable<KeyValue> getRange(KeySelector begin, KeySelector end, int limit, StreamingMode streamingMode, String index);
 
