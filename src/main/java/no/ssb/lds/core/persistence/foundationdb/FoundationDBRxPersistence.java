@@ -28,6 +28,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static com.apple.foundationdb.ReadTransaction.ROW_LIMIT_UNLIMITED;
+import static java.util.Optional.ofNullable;
 
 public class FoundationDBRxPersistence implements RxPersistence {
 
@@ -40,6 +41,9 @@ public class FoundationDBRxPersistence implements RxPersistence {
 
     public static final String PRIMARY_INDEX = "Primary";
     public static final String PATH_VALUE_INDEX = "PathValueIndex";
+
+    private static final ZonedDateTime BEGINNING_OF_TIME = ZonedDateTime.of(1, 1, 1, 0, 0, 0, 0, ZoneId.of("Etc/UTC"));
+    private static final ZonedDateTime END_OF_TIME = ZonedDateTime.of(9999, 1, 1, 0, 0, 0, 0, ZoneId.of("Etc/UTC"));
 
     final TransactionFactory transactionFactory;
     final FoundationDBDirectory foundationDBDirectory;
@@ -88,57 +92,55 @@ public class FoundationDBRxPersistence implements RxPersistence {
     public Completable createOrOverwrite(Transaction tx, Flowable<Fragment> publisher) {
         final OrderedKeyValueTransaction transaction = (OrderedKeyValueTransaction) tx;
         final CopyOnWriteArraySet<Range> clearedRanges = new CopyOnWriteArraySet<>();
-        return publisher.concatMapCompletable(fragment -> Completable.fromRunnable(() ->
-                getPrimary(fragment.namespace(), fragment.entity()).doOnSuccess(primary -> {
-                    Tuple fragmentVersion = toTuple(fragment.timestamp());
+        return publisher.flatMapSingle(fragment -> getPrimary(fragment.namespace(), fragment.entity()).doOnSuccess(primary -> {
+            Tuple fragmentVersion = toTuple(fragment.timestamp());
 
-                    // Clear primary of existing document with same version
-                    Range range = primary.range(Tuple.from(fragment.id(), fragmentVersion));
-                    if (clearedRanges.add(range)) {
-                        transaction.clearRange(range, PRIMARY_INDEX);
-                    }
+            // Clear primary of existing document with same version
+            Range range = primary.range(Tuple.from(fragment.id(), fragmentVersion));
+            if (clearedRanges.add(range)) {
+                transaction.clearRange(range, PRIMARY_INDEX);
+            }
 
-                    // NOTE: With current implementation we do not need to clear the index. False-positive matches in the index
-                    // are always followed up by a primary lookup. Clearing Index space is expensive as it requires a read to
-                    // figure out whether there is anything to clear and then another read to get existing document and then finally
-                    // clearing each document fragment independently from the existing document in the index space which cannot be
-                    // done with a single range operation and therefore must be done using individual write operations per fragment.
+            // NOTE: With current implementation we do not need to clear the index. False-positive matches in the index
+            // are always followed up by a primary lookup. Clearing Index space is expensive as it requires a read to
+            // figure out whether there is anything to clear and then another read to get existing document and then finally
+            // clearing each document fragment independently from the existing document in the index space which cannot be
+            // done with a single range operation and therefore must be done using individual write operations per fragment.
 
-                    /*
-                     * PRIMARY
-                     */
-                    Tuple primaryKey = Tuple.from(
+            /*
+             * PRIMARY
+             */
+            Tuple primaryKey = Tuple.from(
+                    fragment.id(),
+                    fragmentVersion,
+                    fragment.path(),
+                    new byte[]{fragment.fragmentType().getTypeCode()},
+                    fragment.offset()
+            );
+            byte[] binaryPrimaryKey = primary.pack(primaryKey);
+            transaction.set(binaryPrimaryKey, fragment.value(), PRIMARY_INDEX);
+
+            /*
+             * INDEX
+             */
+            ArrayList<Integer> arrayIndices = new ArrayList<>();
+            String indexUnawarePath = Fragment.computeIndexUnawarePath(fragment.path(), arrayIndices);
+            if (fragment.offset() == 0) {
+                getIndex(fragment.namespace(), fragment.entity(), indexUnawarePath).doOnSuccess(index -> {
+                    Tuple valueIndexKey = Tuple.from(
+                            fragment.truncatedValue(),
                             fragment.id(),
                             fragmentVersion,
-                            fragment.path(),
-                            new byte[]{fragment.fragmentType().getTypeCode()},
-                            fragment.offset()
+                            Tuple.from(arrayIndices)
                     );
-                    byte[] binaryPrimaryKey = primary.pack(primaryKey);
-                    transaction.set(binaryPrimaryKey, fragment.value(), PRIMARY_INDEX);
-
-                    /*
-                     * INDEX
-                     */
-                    ArrayList<Integer> arrayIndices = new ArrayList<>();
-                    String indexUnawarePath = Fragment.computeIndexUnawarePath(fragment.path(), arrayIndices);
-                    if (fragment.offset() == 0) {
-                        getIndex(fragment.namespace(), fragment.entity(), indexUnawarePath).doOnSuccess(index -> {
-                            Tuple valueIndexKey = Tuple.from(
-                                    fragment.truncatedValue(),
-                                    fragment.id(),
-                                    fragmentVersion,
-                                    Tuple.from(arrayIndices)
-                            );
-                            byte[] binaryValueIndexKey = index.pack(valueIndexKey);
-                            if (binaryValueIndexKey.length > MAX_DESIRED_KEY_LENGTH) {
-                                throw new IllegalArgumentException("Document fragment key is too big for index, at most " + MAX_DESIRED_KEY_LENGTH + " bytes allowed. Was: " + binaryValueIndexKey.length + " bytes.");
-                            }
-                            transaction.set(binaryValueIndexKey, EMPTY_BYTE_ARRAY, PATH_VALUE_INDEX);
-                        });
+                    byte[] binaryValueIndexKey = index.pack(valueIndexKey);
+                    if (binaryValueIndexKey.length > MAX_DESIRED_KEY_LENGTH) {
+                        throw new IllegalArgumentException("Document fragment key is too big for index, at most " + MAX_DESIRED_KEY_LENGTH + " bytes allowed. Was: " + binaryValueIndexKey.length + " bytes.");
                     }
-                })
-        ));
+                    transaction.set(binaryValueIndexKey, EMPTY_BYTE_ARRAY, PATH_VALUE_INDEX);
+                });
+            }
+        })).ignoreElements();
     }
 
     @Override
@@ -182,8 +184,8 @@ public class FoundationDBRxPersistence implements RxPersistence {
 
     @Override
     public Flowable<Fragment> readVersions(Transaction tx, String namespace, String entity, String id, no.ssb.lds.api.persistence.reactivex.Range<ZonedDateTime> range) {
-        Tuple snapshotFrom = toTuple(range.getAfter());
-        Tuple snapshotTo = toTuple(range.getBefore());
+        Tuple snapshotFrom = toTuple(ofNullable(range.getAfter()).orElse(BEGINNING_OF_TIME));
+        Tuple snapshotTo = toTuple(ofNullable(range.getBefore()).orElse(END_OF_TIME));
         final OrderedKeyValueTransaction transaction = (OrderedKeyValueTransaction) tx;
         return Single.defer(() -> getPrimary(namespace, entity))
                 .flatMapPublisher(primary -> findAnyOneMatchingFragmentInPrimary(transaction, primary, id, snapshotFrom)
@@ -215,15 +217,14 @@ public class FoundationDBRxPersistence implements RxPersistence {
 
     @Override
     public Flowable<Fragment> readAll(Transaction tx, ZonedDateTime snapshot, String namespace, String entity, no.ssb.lds.api.persistence.reactivex.Range<String> range) {
-        Tuple snapshotTuple = toTuple(snapshot);
         final OrderedKeyValueTransaction transaction = (OrderedKeyValueTransaction) tx;
         final AtomicReference<String> idRef = new AtomicReference<>();
         final AtomicReference<ZonedDateTime> versionRef = new AtomicReference<>();
         return Single.defer(() -> getPrimary(namespace, entity))
                 .flatMapPublisher(primary -> Flowable.fromPublisher(
                         new AsyncIterablePublisher<>(transaction.getRange(
-                                KeySelector.firstGreaterOrEqual(primary.pack(Tuple.from(lexicoNext(range.getAfter())))),
-                                KeySelector.firstGreaterOrEqual(primary.pack(Tuple.from(lexicoPrev(range.getBefore())))),
+                                KeySelector.firstGreaterOrEqual(primary.pack(Tuple.from(lexicoNext(ofNullable(range.getAfter()).orElse(" "))))),
+                                KeySelector.firstGreaterOrEqual(primary.pack(Tuple.from(lexicoPrev(ofNullable(range.getBefore()).orElse("~"))))),
                                 PRIMARY_INDEX,
                                 ROW_LIMIT_UNLIMITED
                         )))
@@ -286,13 +287,15 @@ public class FoundationDBRxPersistence implements RxPersistence {
     @Override
     public Single<Boolean> hasPrevious(Transaction tx, ZonedDateTime snapshot, String namespace, String
             entityName, String id) {
-        throw new UnsupportedOperationException();
+        return readAll(tx, snapshot, namespace, entityName, no.ssb.lds.api.persistence.reactivex.Range.lastBefore(1, id)).isEmpty()
+                .map(wasEmpty -> !wasEmpty);
     }
 
     @Override
     public Single<Boolean> hasNext(Transaction tx, ZonedDateTime snapshot, String namespace, String
             entityName, String id) {
-        throw new UnsupportedOperationException();
+        return readAll(tx, snapshot, namespace, entityName, no.ssb.lds.api.persistence.reactivex.Range.firstAfter(1, id)).isEmpty()
+                .map(wasEmpty -> !wasEmpty);
     }
 
     /**
