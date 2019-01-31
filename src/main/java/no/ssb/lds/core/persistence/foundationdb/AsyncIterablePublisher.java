@@ -46,7 +46,16 @@ public class AsyncIterablePublisher<T> implements Publisher<T> {
                 if (cancelled.get()) {
                     return;
                 }
-                requested.addAndGet(n);
+                long r, newRequestedValue;
+                do {
+                    r = requested.get();
+                    if (Long.MAX_VALUE - r < n) {
+                        // overflow
+                        newRequestedValue = Long.MAX_VALUE;
+                    } else {
+                        newRequestedValue = r + n;
+                    }
+                } while (!requested.compareAndSet(r, newRequestedValue));
                 queuePublicationRequest(() -> asyncIterate());
             } catch (Throwable t) {
                 Subscriber<? super T> subscriber = this.subscriber.get();
