@@ -45,6 +45,8 @@ public class FoundationDBRxPersistence implements RxPersistence {
     private static final ZonedDateTime BEGINNING_OF_TIME = ZonedDateTime.of(1, 1, 1, 0, 0, 0, 0, ZoneId.of("Etc/UTC"));
     private static final ZonedDateTime END_OF_TIME = ZonedDateTime.of(9999, 1, 1, 0, 0, 0, 0, ZoneId.of("Etc/UTC"));
 
+    public static final KeyValue EMPTY = new KeyValue(new byte[0], new byte[0]);
+
     final TransactionFactory transactionFactory;
     final FoundationDBDirectory foundationDBDirectory;
 
@@ -92,7 +94,7 @@ public class FoundationDBRxPersistence implements RxPersistence {
     public Completable createOrOverwrite(Transaction tx, Flowable<Fragment> publisher) {
         final OrderedKeyValueTransaction transaction = (OrderedKeyValueTransaction) tx;
         final CopyOnWriteArraySet<Range> clearedRanges = new CopyOnWriteArraySet<>();
-        return publisher.flatMapSingle(fragment -> getPrimary(fragment.namespace(), fragment.entity()).doOnSuccess(primary -> {
+        return publisher.flatMapSingle(fragment -> getPrimary(fragment.namespace(), fragment.entity()).flatMap(primary -> {
             Tuple fragmentVersion = toTuple(fragment.timestamp());
 
             // Clear primary of existing document with same version
@@ -126,7 +128,7 @@ public class FoundationDBRxPersistence implements RxPersistence {
             ArrayList<Integer> arrayIndices = new ArrayList<>();
             String indexUnawarePath = Fragment.computeIndexUnawarePath(fragment.path(), arrayIndices);
             if (fragment.offset() == 0) {
-                getIndex(fragment.namespace(), fragment.entity(), indexUnawarePath).doOnSuccess(index -> {
+                return getIndex(fragment.namespace(), fragment.entity(), indexUnawarePath).doOnSuccess(index -> {
                     Tuple valueIndexKey = Tuple.from(
                             fragment.truncatedValue(),
                             fragment.id(),
@@ -140,6 +142,7 @@ public class FoundationDBRxPersistence implements RxPersistence {
                     transaction.set(binaryValueIndexKey, EMPTY_BYTE_ARRAY, PATH_VALUE_INDEX);
                 });
             }
+            return Single.just(primary);
         })).ignoreElements();
     }
 
@@ -189,9 +192,11 @@ public class FoundationDBRxPersistence implements RxPersistence {
         final OrderedKeyValueTransaction transaction = (OrderedKeyValueTransaction) tx;
         return Single.defer(() -> getPrimary(namespace, entity))
                 .flatMapPublisher(primary -> findAnyOneMatchingFragmentInPrimary(transaction, primary, id, snapshotFrom)
+                        .filter(kv -> primary.contains(kv.getKey()))
+                        .switchIfEmpty(Single.just(EMPTY))
                         .flatMapPublisher(aMatchingKeyValue -> {
                             Tuple lowerBound;
-                            if (aMatchingKeyValue == null || !primary.contains(aMatchingKeyValue.getKey())) {
+                            if (aMatchingKeyValue == EMPTY || !primary.contains(aMatchingKeyValue.getKey())) {
                                 // no versions older or equals to snapshotFrom exists, use snapshotFrom as lower bound
                                 lowerBound = snapshotFrom;
                             } else {
@@ -237,11 +242,12 @@ public class FoundationDBRxPersistence implements RxPersistence {
                             if (snapshot.isBefore(fragment.timestamp())) {
                                 return false;
                             }
-                            if (versionRef == null) {
+                            if (versionRef.get() == null) {
                                 versionRef.set(fragment.timestamp());
                             }
                             return fragment.timestamp().equals(versionRef.get());
-                        }));
+                        })
+                );
     }
 
     @Override
