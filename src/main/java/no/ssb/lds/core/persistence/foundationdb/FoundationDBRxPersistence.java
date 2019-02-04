@@ -23,6 +23,7 @@ import no.ssb.lds.api.persistence.streaming.FragmentType;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.CopyOnWriteArraySet;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -404,15 +405,28 @@ public class FoundationDBRxPersistence implements RxPersistence {
 
     private Completable doDeleteAllVersions(OrderedKeyValueTransaction transaction, String
             namespace, String entity, String resourceId, PersistenceDeletePolicy policy) {
-        return Single.defer(() -> getPrimary(namespace, entity).doOnSuccess(primary -> {
-            /*
-             * Get all fragments of given versioned resource.
-             */
-            Range range = primary.range(Tuple.from(resourceId));
-            Flowable.fromPublisher(new AsyncIterablePublisher<>(transaction.getRange(range, PRIMARY_INDEX, ROW_LIMIT_UNLIMITED)))
-                    .flatMapCompletable(kv -> deleteFragmentFromPathValueIndex(transaction, namespace, entity, primary, kv));
-            transaction.clearRange(range, PRIMARY_INDEX);
-        })).ignoreElement();
+        return Completable.defer(() -> getPrimary(namespace, entity)
+                .flatMapCompletable(primary -> Flowable.fromPublisher(new AsyncIterablePublisher<>(transaction.getRange(primary.range(Tuple.from(resourceId)), PRIMARY_INDEX, ROW_LIMIT_UNLIMITED)))
+                        .flatMapCompletable(kv -> deleteFragmentFromPathValueIndex(transaction, namespace, entity, primary, kv))
+                        .doOnComplete(() -> transaction.clearRange(primary.range(Tuple.from(resourceId)), PRIMARY_INDEX))));
+    }
+
+    @Override
+    public Completable deleteAllEntities(Transaction transaction, String namespace, String entity, Iterable<String> paths) {
+        return doDeleteAllEntities((OrderedKeyValueTransaction) transaction, namespace, entity, paths);
+    }
+
+    private Completable doDeleteAllEntities(OrderedKeyValueTransaction transaction, String namespace, String entity, Iterable<String> paths) {
+        return Completable.merge(List.of(
+                Completable.defer(() -> getPrimary(namespace, entity).flatMapCompletable(primary -> {
+                    transaction.clearRange(primary.range(), PRIMARY_INDEX);
+                    return Completable.complete();
+                })),
+                Flowable.fromIterable(paths).flatMapCompletable(path -> getIndex(namespace, entity, path).flatMapCompletable(index -> {
+                    transaction.clearRange(index.range(), PATH_VALUE_INDEX);
+                    return Completable.complete();
+                }))
+        ));
     }
 
     @Override
