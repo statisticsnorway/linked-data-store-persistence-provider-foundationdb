@@ -8,7 +8,6 @@ import com.apple.foundationdb.async.AsyncIterable;
 import com.apple.foundationdb.subspace.Subspace;
 import com.apple.foundationdb.tuple.Tuple;
 import io.reactivex.Completable;
-import io.reactivex.CompletableSource;
 import io.reactivex.Flowable;
 import io.reactivex.Maybe;
 import io.reactivex.Single;
@@ -95,7 +94,7 @@ public class FoundationDBRxPersistence implements RxPersistence {
     public Completable createOrOverwrite(Transaction tx, Flowable<Fragment> publisher) {
         final OrderedKeyValueTransaction transaction = (OrderedKeyValueTransaction) tx;
         final CopyOnWriteArraySet<Range> clearedRanges = new CopyOnWriteArraySet<>();
-        return publisher.flatMapSingle(fragment -> getPrimary(fragment.namespace(), fragment.entity()).flatMap(primary -> {
+        return publisher.flatMapCompletable(fragment -> getPrimary(fragment.namespace(), fragment.entity()).flatMapCompletable(primary -> {
             Tuple fragmentVersion = toTuple(fragment.timestamp());
 
             // Clear primary of existing document with same version
@@ -129,7 +128,7 @@ public class FoundationDBRxPersistence implements RxPersistence {
             ArrayList<Integer> arrayIndices = new ArrayList<>();
             String indexUnawarePath = Fragment.computeIndexUnawarePath(fragment.path(), arrayIndices);
             if (fragment.offset() == 0) {
-                return getIndex(fragment.namespace(), fragment.entity(), indexUnawarePath).doOnSuccess(index -> {
+                return getIndex(fragment.namespace(), fragment.entity(), indexUnawarePath).flatMapCompletable(index -> {
                     Tuple valueIndexKey = Tuple.from(
                             fragment.truncatedValue(),
                             fragment.id(),
@@ -141,10 +140,11 @@ public class FoundationDBRxPersistence implements RxPersistence {
                         throw new IllegalArgumentException("Document fragment key is too big for index, at most " + MAX_DESIRED_KEY_LENGTH + " bytes allowed. Was: " + binaryValueIndexKey.length + " bytes.");
                     }
                     transaction.set(binaryValueIndexKey, EMPTY_BYTE_ARRAY, PATH_VALUE_INDEX);
+                    return Completable.complete();
                 });
             }
-            return Single.just(primary);
-        })).ignoreElements();
+            return Completable.complete();
+        }));
     }
 
     @Override
@@ -369,7 +369,7 @@ public class FoundationDBRxPersistence implements RxPersistence {
         })).ignoreElement();
     }
 
-    private CompletableSource deleteFragmentFromPathValueIndex(OrderedKeyValueTransaction transaction, String namespace, String entity, Subspace primary, KeyValue kv) {
+    private Completable deleteFragmentFromPathValueIndex(OrderedKeyValueTransaction transaction, String namespace, String entity, Subspace primary, KeyValue kv) {
         Tuple key = primary.unpack(kv.getKey());
         String id = key.getString(0);
         Tuple version = key.getNestedTuple(1);
