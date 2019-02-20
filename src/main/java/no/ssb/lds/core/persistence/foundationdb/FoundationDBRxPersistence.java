@@ -264,6 +264,9 @@ public class FoundationDBRxPersistence implements RxPersistence {
                     Tuple key = index.unpack(pathValueIndexedKeyValue.getKey());
                     String id = key.getString(1);
                     Tuple matchedVersion = key.getNestedTuple(2);
+                    if (toTimestamp(matchedVersion).isAfter(snapshot)) {
+                        return Flowable.empty();
+                    }
                     return findAnyOneMatchingFragmentInPrimary(transaction, primary, id, matchedVersion).flatMapPublisher(aMatchingFragmentKv -> {
                         Tuple keyTuple = primary.unpack(aMatchingFragmentKv.getKey());
                         Tuple versionTuple = keyTuple.getNestedTuple(1);
