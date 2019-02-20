@@ -260,14 +260,24 @@ public class FoundationDBRxPersistence implements RxPersistence {
                 OrderedKeyValueTransaction transaction = (OrderedKeyValueTransaction) tx;
                 byte[] truncatedValue = Fragment.truncate(value);
                 AsyncIterablePublisher<KeyValue> indexMatchesPublisher = new AsyncIterablePublisher<>(transaction.getRange(index.range(Tuple.from(truncatedValue)), PATH_VALUE_INDEX, ROW_LIMIT_UNLIMITED));
-                return Flowable.fromPublisher(indexMatchesPublisher).concatMapEager(pathValueIndexedKeyValue -> {
+                AtomicReference<String> idRef = new AtomicReference<>(null);
+                return Flowable.fromPublisher(indexMatchesPublisher).filter(pathValueIndexedKeyValue -> {
                     Tuple key = index.unpack(pathValueIndexedKeyValue.getKey());
-                    String id = key.getString(1);
                     Tuple matchedVersion = key.getNestedTuple(2);
                     if (toTimestamp(matchedVersion).isAfter(snapshot)) {
-                        return Flowable.empty();
+                        return false; // false-positive, version was not yet visible at snapshot time
                     }
-                    return findAnyOneMatchingFragmentInPrimary(transaction, primary, id, matchedVersion).flatMapPublisher(aMatchingFragmentKv -> {
+                    String id = key.getString(1);
+                    if (id.equals(idRef.get())) {
+                        return false; // false-positive, older version of same resource as previous
+                    }
+                    idRef.set(id);
+                    return true;
+                }).concatMapEager(pathValueIndexedKeyValue -> {
+                    Tuple key = index.unpack(pathValueIndexedKeyValue.getKey());
+                    Tuple matchedVersion = key.getNestedTuple(2);
+                    String id = key.getString(1);
+                    return findAnyOneMatchingFragmentInPrimary(transaction, primary, id, toTuple(snapshot)).flatMapPublisher(aMatchingFragmentKv -> {
                         Tuple keyTuple = primary.unpack(aMatchingFragmentKv.getKey());
                         Tuple versionTuple = keyTuple.getNestedTuple(1);
                         FragmentType fragmentType = FragmentType.fromTypeCode(keyTuple.getBytes(3)[0]);
