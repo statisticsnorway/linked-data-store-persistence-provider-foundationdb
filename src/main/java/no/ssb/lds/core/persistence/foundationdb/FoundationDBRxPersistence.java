@@ -92,6 +92,7 @@ public class FoundationDBRxPersistence implements RxPersistence {
 
     @Override
     public Completable createOrOverwrite(Transaction tx, Flowable<Fragment> publisher) {
+        // TODO add batch-size
         final OrderedKeyValueTransaction transaction = (OrderedKeyValueTransaction) tx;
         final CopyOnWriteArraySet<Range> clearedRanges = new CopyOnWriteArraySet<>();
         return publisher.flatMapCompletable(fragment -> getPrimary(fragment.namespace(), fragment.entity()).flatMapCompletable(primary -> {
