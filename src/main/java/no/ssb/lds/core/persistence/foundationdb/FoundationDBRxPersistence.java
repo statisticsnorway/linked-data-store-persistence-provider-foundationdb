@@ -259,7 +259,7 @@ public class FoundationDBRxPersistence implements RxPersistence {
             String arrayIndexUnawarePath = Fragment.computeIndexUnawarePath(path, new ArrayList<>());
             return getIndex(namespace, entity, arrayIndexUnawarePath).flatMapPublisher(index -> {
                 OrderedKeyValueTransaction transaction = (OrderedKeyValueTransaction) tx;
-                byte[] truncatedValue = Fragment.truncate(value);
+                byte[] truncatedValue = Fragment.hashOf(value);
                 AsyncIterablePublisher<KeyValue> indexMatchesPublisher = new AsyncIterablePublisher<>(transaction.getRange(index.range(Tuple.from(truncatedValue)), PATH_VALUE_INDEX, ROW_LIMIT_UNLIMITED));
                 AtomicReference<String> idRef = new AtomicReference<>(null);
                 return Flowable.fromPublisher(indexMatchesPublisher).filter(pathValueIndexedKeyValue -> {
@@ -397,7 +397,7 @@ public class FoundationDBRxPersistence implements RxPersistence {
         ArrayList<Integer> indices = new ArrayList<>();
         String indexUnawarePath = Fragment.computeIndexUnawarePath(path, indices);
         Tuple arrayIndices = Tuple.from(indices);
-        byte[] truncatedValue = Fragment.truncate(kv.getValue());
+        byte[] truncatedValue = Fragment.hashOf(kv.getValue());
         Tuple valueIndexKey = Tuple.from(
                 truncatedValue,
                 id,
