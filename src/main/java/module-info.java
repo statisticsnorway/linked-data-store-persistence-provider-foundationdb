@@ -5,7 +5,6 @@ module no.ssb.lds.persistence.foundationdb {
     requires java.logging;
     requires jul.to.slf4j;
     requires fdb.java;
-    requires org.slf4j;
     requires io.reactivex.rxjava2;
     requires org.reactivestreams;
 
