@@ -4,7 +4,7 @@
 
     <groupId>no.ssb.lds</groupId>
     <artifactId>linked-data-store-persistence-provider-foundationdb</artifactId>
-    <version>0.8</version>
+    <version>0.9-SNAPSHOT</version>
     <packaging>jar</packaging>
     <name>LinkedDataStore FoundationDB persistence-provider</name>
     <description>LinkedDataStore FoundationDB persistence-provider</description>
@@ -45,7 +45,7 @@
         <connection>scm:git:git://github.com/statisticsnorway/linked-data-store-persistence-provider-foundationdb.git</connection>
         <developerConnection>scm:git:git@github.com:statisticsnorway/linked-data-store-persistence-provider-foundationdb.git</developerConnection>
         <url>https://github.com/statisticsnorway/linked-data-store-persistence-provider-foundationdb/tree/master</url>
-        <tag>v0.8</tag>
+        <tag>HEAD</tag>
     </scm>
 
     <distributionManagement>
