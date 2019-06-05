@@ -3,7 +3,7 @@ import no.ssb.lds.api.persistence.PersistenceInitializer;
 module no.ssb.lds.persistence.foundationdb {
     requires no.ssb.lds.persistence.api;
     requires java.logging;
-    requires jul.to.slf4j;
+    requires jul_to_slf4j;
     requires fdb.java;
     requires io.reactivex.rxjava2;
     requires org.reactivestreams;
