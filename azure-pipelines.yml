@@ -52,7 +52,7 @@ jobs:
 
     # Steps in this Job
     steps:
-      -
+
       # Authenticate Maven to Nexus using predefined Service Connections
       # (Project Settings->Pipelines->Service Connections)
       - template: maven/task-authenticate.yml@templates
