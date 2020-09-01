@@ -21,7 +21,7 @@ resources:
       type:         github
       name:         statisticsnorway/azure-pipelines-templates
       ref:          refs/tags/0.1.1
-      endpoint:     statisticsnorway  (6)
+      endpoint:     statisticsnorway (6)
 
 # Pipeline will be run on this base image
 pool:
