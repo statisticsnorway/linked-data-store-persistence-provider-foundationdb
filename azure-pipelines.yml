@@ -1,19 +1,69 @@
-# Starter pipeline
-# Start with a minimal pipeline that you can customize to build and deploy your code.
-# Add steps that build, run tests, deploy, and more:
-# https://aka.ms/yaml
+name: (Build.SourceBranch)-$(date:yyyyMMdd)$(rev:.r)
 
+# Pipeline triggers on any branch and tag
+parameters:
+  - name:     'mavenContainer'
+    default:  'maven:3-jdk-11'
 trigger:
-- master
+  branches:
+    include:
+      - '*'
+  tags:
+    include:
+      - '*'
 
+resources:
+  containers:
+    - container:    'ubuntu_container_for_build_deploy_to_nexus'
+      image:        'ubuntu:latest'
+    repositories:
+      - repository: templates
+        type:       github
+        name:       statisticsnorway/azure-pipelines-templates
+        ref:        refs/tags/0.1.1
+        endpoint:   statisticsnorway  (6)
+
+# Pipeline will be run on this base image
 pool:
   vmImage: 'ubuntu-latest'
 
-steps:
-- script: echo Hello, world!
-  displayName: 'Run a one-line script'
+# Variables global to this pipeline
+# https://docs.microsoft.com/en-us/azure/devops/pipelines/process/variables
+variables:
+  # Variables defined in Pipelines->Library->Variable Groups in your project in
+  # Azure Pipelines
+  - group: Hemmeligheter
+  # Variables defined here
+  - name:  MAVEN_CACHE_FOLDER
+    value: $(Pipeline.Workspace)/.m2/repository
+  - name: MAVEN_OPTS
+    value: '-Dmaven.repo.local=$(MAVEN_CACHE_FOLDER)'
 
-- script: |
-    echo Add other tasks to build, test, and deploy your project.
-    echo See https://aka.ms/yaml
-  displayName: 'Run a multi-line script'
+
+# Job which runs mvn build, mvn install,
+jobs:
+  - job: buildTest
+    displayName:  'compile deploy app'
+    container:    'maven:3-jdk-11'
+
+    # Job condition: Run these jobs on any branch, but not on tags
+    condition: not(startsWith(variables['Build.SourceBranch'], 'refs/tags/'))
+
+    # Steps in this Job
+    steps:
+      -
+      # Authenticate Maven to Nexus using predefined Service Connections
+      # (Project Settings->Pipelines->Service Connections)
+      - template: maven/task-authenticate.yml@templates
+
+      #Maven caching to speed up pipeline build time
+      - template: maven/task-cache.yml@templates
+
+      - template: maven/task-test-and-verify.yml@templates
+
+      # Code analysis
+      - template: maven/task-sonar-analyze.yml@templates
+
+      # Deploy artifact to Nexus
+      - ${{ if eq(variables['Build.SourceBranch'], 'refs/heads/master') }}:
+          - template: maven/task-install-and-deploy-to-nexus.yml@templates
