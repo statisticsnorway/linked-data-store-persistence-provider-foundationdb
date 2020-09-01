@@ -16,12 +16,12 @@ resources:
   containers:
     - container:    'ubuntu_container_for_build_deploy_to_nexus'
       image:        'ubuntu:latest'
-    repositories:
-      - repository: templates
-        type:       github
-        name:       statisticsnorway/azure-pipelines-templates
-        ref:        refs/tags/0.1.1
-        endpoint:   statisticsnorway  (6)
+  repositories:
+    - repository:   templates
+      type:         github
+      name:         statisticsnorway/azure-pipelines-templates
+      ref:          refs/tags/0.1.1
+      endpoint:     statisticsnorway  (6)
 
 # Pipeline will be run on this base image
 pool:
