@@ -30,9 +30,11 @@ pool:
 # Variables global to this pipeline
 # https://docs.microsoft.com/en-us/azure/devops/pipelines/process/variables
 variables:
+
   # Variables defined in Pipelines->Library->Variable Groups in your project in
   # Azure Pipelines
   - group: Hemmeligheter
+
   # Variables defined here
   - name:  MAVEN_CACHE_FOLDER
     value: $(Pipeline.Workspace)/.m2/repository
