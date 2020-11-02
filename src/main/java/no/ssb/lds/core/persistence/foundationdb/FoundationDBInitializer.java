@@ -9,6 +9,7 @@ import no.ssb.lds.api.persistence.PersistenceInitializer;
 import no.ssb.lds.api.persistence.ProviderName;
 import no.ssb.lds.api.persistence.reactivex.RxJsonPersistence;
 import no.ssb.lds.api.persistence.reactivex.RxJsonPersistenceBridge;
+import no.ssb.lds.api.specification.Specification;
 
 import java.util.Map;
 import java.util.Set;
@@ -34,7 +35,7 @@ public class FoundationDBInitializer implements PersistenceInitializer {
     }
 
     @Override
-    public RxJsonPersistence initialize(String defaultNamespace, Map<String, String> configuration, Set<String> managedDomains) {
+    public RxJsonPersistence initialize(String defaultNamespace, Map<String, String> configuration, Set<String> managedDomains, Specification specification) {
         FDB fdb = FDB.selectAPIVersion(520);
         Database db = fdb.open();
         String nodePrefixHex = configuration.get("foundationdb.directory.node-prefix.hex");

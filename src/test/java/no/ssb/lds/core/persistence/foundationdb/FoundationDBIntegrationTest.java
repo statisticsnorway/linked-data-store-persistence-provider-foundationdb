@@ -20,7 +20,8 @@ public class FoundationDBIntegrationTest extends PersistenceIntegrationTest {
                 Map.of("foundationdb.directory.node-prefix.hex", "3A",
                         "foundationdb.directory.content-prefix.hex", "3B",
                         "persistence.fragment.capacity", String.valueOf(8192)),
-                Set.of("Person", "Address", "FunkyLongAddress"));
+                Set.of("Person", "Address", "FunkyLongAddress"),
+                null);
     }
 
     @AfterClass
